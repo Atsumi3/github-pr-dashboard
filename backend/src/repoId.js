@@ -3,8 +3,12 @@
 export const REPO_NAME_RE = /^[A-Za-z0-9_.-]+$/;
 
 export function validateOwnerName(owner, name) {
-  return typeof owner === 'string' && typeof name === 'string'
-    && REPO_NAME_RE.test(owner) && REPO_NAME_RE.test(name);
+  return (
+    typeof owner === 'string' &&
+    typeof name === 'string' &&
+    REPO_NAME_RE.test(owner) &&
+    REPO_NAME_RE.test(name)
+  );
 }
 
 export function parseRepoId(id) {

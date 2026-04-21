@@ -5,7 +5,8 @@ const router = Router();
 const HOST_AI_URL = process.env.HOST_AI_URL || 'http://host.docker.internal:3002';
 const AI_SHARED_SECRET = process.env.AI_SHARED_SECRET || '';
 const AI_TIMEOUT_MS = 70000;
-const AI_UNAVAILABLE_MESSAGE = 'AI server is not running. Start it with: cd ai-server && node server.js';
+const AI_UNAVAILABLE_MESSAGE =
+  'AI server is not running. Start it with: cd ai-server && node server.js';
 
 async function callAi(path, payload) {
   const headers = { 'Content-Type': 'application/json' };
@@ -58,7 +59,12 @@ router.get('/api/ai/status', async (_req, res) => {
     });
     if (!r.ok) {
       const data = await r.json().catch(() => ({}));
-      return sendError(res, 503, ERROR_CODES.AI_SERVER_ERROR, data.error || `AI server returned ${r.status}`);
+      return sendError(
+        res,
+        503,
+        ERROR_CODES.AI_SERVER_ERROR,
+        data.error || `AI server returned ${r.status}`,
+      );
     }
     res.json(await r.json());
   } catch (err) {
@@ -79,7 +85,12 @@ router.put('/api/ai/config', async (req, res) => {
     });
     const data = await r.json().catch(() => ({}));
     if (!r.ok) {
-      return sendError(res, r.status === 400 ? 400 : 503, ERROR_CODES.AI_SERVER_ERROR, data.error || `AI server returned ${r.status}`);
+      return sendError(
+        res,
+        r.status === 400 ? 400 : 503,
+        ERROR_CODES.AI_SERVER_ERROR,
+        data.error || `AI server returned ${r.status}`,
+      );
     }
     res.json(data);
   } catch (err) {

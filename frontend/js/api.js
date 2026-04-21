@@ -37,16 +37,19 @@ export const api = {
   addRepo: (repo) => request('POST', '/api/repos', { repo }),
   suggestions: () => request('GET', '/api/repos/suggestions'),
   removeRepo: (owner, name) => request('DELETE', `/api/repos/${owner}/${name}`),
-  setRepoPaused: (owner, name, paused) => request('PATCH', `/api/repos/${owner}/${name}`, { paused }),
+  setRepoPaused: (owner, name, paused) =>
+    request('PATCH', `/api/repos/${owner}/${name}`, { paused }),
   searchRepos: (q) => request('GET', `/api/repos/search?q=${encodeURIComponent(q)}`),
   prs: (assignee) => request('GET', assignee ? '/api/prs?assignee=me' : '/api/prs'),
-  prsForRepo: (owner, repo, assignee) => request('GET', `/api/prs/repo/${owner}/${repo}${assignee ? '?assignee=me' : ''}`),
+  prsForRepo: (owner, repo, assignee) =>
+    request('GET', `/api/prs/repo/${owner}/${repo}${assignee ? '?assignee=me' : ''}`),
   prDetail: (owner, repo, number) => request('GET', `/api/prs/${owner}/${repo}/${number}`),
   aiSummarize: (text) => request('POST', '/api/ai/summarize', { text }),
   aiSummarizePR: (prData) => request('POST', '/api/ai/summarize-pr', prData),
   aiStatus: () => request('GET', '/api/ai/status'),
   updateAiConfig: (config) => request('PUT', '/api/ai/config', config),
-  refreshPrs: (assignee) => request('POST', assignee ? '/api/prs/refresh?assignee=me' : '/api/prs/refresh'),
+  refreshPrs: (assignee) =>
+    request('POST', assignee ? '/api/prs/refresh?assignee=me' : '/api/prs/refresh'),
   settings: () => request('GET', '/api/settings'),
   updateSettings: (settings) => request('PUT', '/api/settings', settings),
 };

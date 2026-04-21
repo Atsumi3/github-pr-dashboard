@@ -16,7 +16,12 @@ router.put('/api/settings', async (req, res) => {
 
   if (pollInterval !== undefined) {
     if (typeof pollInterval !== 'number' || pollInterval < 15 || pollInterval > 3600) {
-      return sendError(res, 400, ERROR_CODES.INVALID_REQUEST, 'pollInterval must be between 15 and 3600');
+      return sendError(
+        res,
+        400,
+        ERROR_CODES.INVALID_REQUEST,
+        'pollInterval must be between 15 and 3600',
+      );
     }
   }
 

@@ -20,8 +20,10 @@ const ALLOWED_HOSTS = new Set([
 const KNOWN_CLIS = ['claude', 'codex', 'gemini', 'chatgpt'];
 
 const DEFAULT_PROMPTS = Object.freeze({
-  summarize: '次のレビューコメントを日本語で簡潔に要約してください。重要な指摘事項のみを箇条書きで、3項目以内で答えてください。',
-  summarizePr: '次の Pull Request を日本語で簡潔に要約してください。何を実装/修正しているか、影響範囲、注意点を箇条書きで答えてください。',
+  summarize:
+    '次のレビューコメントを日本語で簡潔に要約してください。重要な指摘事項のみを箇条書きで、3項目以内で答えてください。',
+  summarizePr:
+    '次の Pull Request を日本語で簡潔に要約してください。何を実装/修正しているか、影響範囲、注意点を箇条書きで答えてください。',
 });
 
 // Mutable runtime config (loaded from file at startup, overridable via PUT /config).
@@ -36,7 +38,9 @@ function detectCli(name) {
   return new Promise((resolve) => {
     const child = spawn('which', [name], { stdio: ['ignore', 'pipe', 'ignore'] });
     let out = '';
-    child.stdout.on('data', (d) => { out += d; });
+    child.stdout.on('data', (d) => {
+      out += d;
+    });
     child.on('close', (code) => {
       if (code === 0 && out.trim()) {
         resolve({ available: true, path: out.trim() });
@@ -58,10 +62,13 @@ async function loadConfig() {
     const raw = await readFile(CONFIG_PATH, 'utf-8');
     const parsed = JSON.parse(raw);
     if (parsed.cli && typeof parsed.cli === 'string') runtimeConfig.cli = parsed.cli;
-    if (Array.isArray(parsed.cliArgs)) runtimeConfig.cliArgs = parsed.cliArgs.filter((a) => typeof a === 'string');
+    if (Array.isArray(parsed.cliArgs))
+      runtimeConfig.cliArgs = parsed.cliArgs.filter((a) => typeof a === 'string');
     if (parsed.prompts) {
-      if (typeof parsed.prompts.summarize === 'string') runtimeConfig.prompts.summarize = parsed.prompts.summarize;
-      if (typeof parsed.prompts.summarizePr === 'string') runtimeConfig.prompts.summarizePr = parsed.prompts.summarizePr;
+      if (typeof parsed.prompts.summarize === 'string')
+        runtimeConfig.prompts.summarize = parsed.prompts.summarize;
+      if (typeof parsed.prompts.summarizePr === 'string')
+        runtimeConfig.prompts.summarizePr = parsed.prompts.summarizePr;
     }
     console.log(`Loaded config from ${CONFIG_PATH}`);
   } catch (err) {
@@ -83,7 +90,10 @@ async function saveConfig() {
 function readBody(req) {
   return new Promise((resolve, reject) => {
     let data = '';
-    req.on('data', (chunk) => { data += chunk; if (data.length > MAX_TEXT_BYTES) reject(new Error('payload too large')); });
+    req.on('data', (chunk) => {
+      data += chunk;
+      if (data.length > MAX_TEXT_BYTES) reject(new Error('payload too large'));
+    });
     req.on('end', () => resolve(data));
     req.on('error', reject);
   });
@@ -122,7 +132,10 @@ function runCLI(prompt) {
       if (stderrBytes > MAX_OUTPUT_BYTES) return guardOverflow('stderr');
       stderr += d;
     });
-    child.on('error', (err) => { clearTimeout(timer); if (!killed) reject(err); });
+    child.on('error', (err) => {
+      clearTimeout(timer);
+      if (!killed) reject(err);
+    });
     child.on('close', (code) => {
       if (killed) return;
       clearTimeout(timer);
@@ -247,7 +260,9 @@ const server = http.createServer(async (req, res) => {
       }
 
       const fileLines = Array.isArray(files)
-        ? files.map((f) => `- ${f.filename} (+${f.additions ?? 0} / -${f.deletions ?? 0})`).join('\n')
+        ? files
+            .map((f) => `- ${f.filename} (+${f.additions ?? 0} / -${f.deletions ?? 0})`)
+            .join('\n')
         : '';
       const composed = `# Title\n${title}\n\n# Body\n${prBody || '(no description)'}\n\n# Changed files\n${fileLines || '(none)'}`;
 
@@ -259,7 +274,9 @@ const server = http.createServer(async (req, res) => {
 
       const prompt = `${runtimeConfig.prompts.summarizePr}\n\n---\n${composed}`;
 
-      console.log(`[${new Date().toISOString()}] Summarizing PR (${composed.length} chars) via ${runtimeConfig.cli}`);
+      console.log(
+        `[${new Date().toISOString()}] Summarizing PR (${composed.length} chars) via ${runtimeConfig.cli}`,
+      );
       const summary = await runCLI(prompt);
 
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -289,7 +306,9 @@ const server = http.createServer(async (req, res) => {
 
       const prompt = `${runtimeConfig.prompts.summarize}\n\n---\n${text}`;
 
-      console.log(`[${new Date().toISOString()}] Summarizing ${text.length} chars via ${runtimeConfig.cli}`);
+      console.log(
+        `[${new Date().toISOString()}] Summarizing ${text.length} chars via ${runtimeConfig.cli}`,
+      );
       const summary = await runCLI(prompt);
 
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -302,12 +321,15 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  res.writeHead(404); res.end();
+  res.writeHead(404);
+  res.end();
 });
 
 await loadConfig();
 availableClis = await detectAllClis();
-const installed = Object.entries(availableClis).filter(([, v]) => v.available).map(([k]) => k);
+const installed = Object.entries(availableClis)
+  .filter(([, v]) => v.available)
+  .map(([k]) => k);
 console.log(`Detected CLIs: ${installed.join(', ') || '(none)'}`);
 
 server.listen(PORT, '127.0.0.1', () => {

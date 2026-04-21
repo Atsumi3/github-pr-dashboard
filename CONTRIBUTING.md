@@ -116,11 +116,11 @@ AI_SHARED_SECRET=<.env と同じ値> node server.js
 
 ### コードを変更したとき
 
-| 変更箇所 | 反映方法 |
-|---------|---------|
+| 変更箇所               | 反映方法                                                                                     |
+| ---------------------- | -------------------------------------------------------------------------------------------- |
 | frontend (HTML/CSS/JS) | コンテナのボリュームマウントを使っていない構成のため、`docker compose up --build` で再ビルド |
-| backend (Node.js) | 同上 (`--build`) |
-| ai-server | プロセスを再起動 (`Ctrl-C` → `node server.js`) |
+| backend (Node.js)      | 同上 (`--build`)                                                                             |
+| ai-server              | プロセスを再起動 (`Ctrl-C` → `node server.js`)                                               |
 
 開発中は backend を `pnpm start` でホスト直接起動するのも可能です (その場合 frontend からのアクセスにはポート設定の調整が必要)。
 

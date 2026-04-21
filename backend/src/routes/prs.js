@@ -41,7 +41,9 @@ export async function fetchAllPRs(token) {
       return;
     }
 
-    console.log(`Fetch: fetching PRs for ${activeRepos.length}/${allRepos.length} repo(s) (others paused)`);
+    console.log(
+      `Fetch: fetching PRs for ${activeRepos.length}/${allRepos.length} repo(s) (others paused)`,
+    );
     const previous = cache.get() || [];
     const previousByRepo = new Map(previous.map((r) => [r.repo, r]));
     const results = await Promise.all(
@@ -52,8 +54,12 @@ export async function fetchAllPRs(token) {
         } catch (err) {
           const detail = err.errors
             ? JSON.stringify(err.errors)
-            : (err.status ? `status=${err.status}` : '');
-          console.error(`Fetch: failed to fetch ${repo.id}: ${err.message}${detail ? ' | ' + detail : ''}`);
+            : err.status
+              ? `status=${err.status}`
+              : '';
+          console.error(
+            `Fetch: failed to fetch ${repo.id}: ${err.message}${detail ? ' | ' + detail : ''}`,
+          );
           // Preserve the previous successful PR list for this repo rather than
           // showing "Repository inaccessible" whenever GitHub returns a
           // transient 5xx. Users see slightly stale data instead of an empty

@@ -1,3 +1,5 @@
+import { clearAllCaches } from './local-cache.js';
+
 const KEY = 'gh-token';
 
 export function getToken() {
@@ -24,6 +26,7 @@ export function clearToken() {
   } catch {
     // ignore
   }
+  clearAllCaches();
   syncTokenToServiceWorker(null);
   clearServiceWorkerCache();
 }

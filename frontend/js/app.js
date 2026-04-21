@@ -1,5 +1,14 @@
 import { api, getStoredToken, clearStoredToken } from './api.js';
-import { initSidebar, renderRepoList, initSettings, initAiPanel, showToast, isRepoVisible, confirmDialog } from './settings.js';
+import {
+  initSidebar,
+  renderRepoList,
+  initSettings,
+  initAiPanel,
+  showToast,
+  isRepoVisible,
+  confirmDialog,
+} from './settings.js';
+import { readCache, writeCache, CACHE_KEYS } from './local-cache.js';
 
 let pollTimer = null;
 let hasRunInitialScan = false;
@@ -39,7 +48,7 @@ function applySearchFilter() {
     const repoId = section.dataset.repo;
     const hasContent = (visibleByRepo.get(repoId) || 0) > 0;
     const isHiddenByVisibility = !isRepoVisible(repoId);
-    const next = (hasContent && !isHiddenByVisibility) ? '' : 'none';
+    const next = hasContent && !isHiddenByVisibility ? '' : 'none';
     if (section.style.display !== next) section.style.display = next;
   });
 }
@@ -47,7 +56,10 @@ function applySearchFilter() {
 function updateLastUpdatedDisplay() {
   const el = document.getElementById('last-updated');
   if (!el) return;
-  if (!lastFetchAt) { el.textContent = '--'; return; }
+  if (!lastFetchAt) {
+    el.textContent = '--';
+    return;
+  }
   const diff = Math.floor((Date.now() - lastFetchAt) / 1000);
   let text;
   if (diff < 5) text = 'Updated just now';
@@ -83,7 +95,10 @@ function sendNotification(title, body, url) {
   if ('Notification' in window && Notification.permission === 'granted') {
     const n = new Notification(title, { body });
     if (url) {
-      n.onclick = () => { window.open(url, '_blank'); n.close(); };
+      n.onclick = () => {
+        window.open(url, '_blank');
+        n.close();
+      };
     }
     setTimeout(() => n.close(), 10000);
   }
@@ -111,11 +126,7 @@ function detectChangesAndNotify(newData) {
       const oldStatus = previousPRState.get(key);
       if (oldStatus === undefined) {
         // New PR opened
-        sendNotification(
-          `New PR: ${repo.repo}`,
-          `#${pr.number} ${pr.title}`,
-          pr.url,
-        );
+        sendNotification(`New PR: ${repo.repo}`, `#${pr.number} ${pr.title}`, pr.url);
       } else if (oldStatus !== pr.reviewStatus) {
         // Status changed
         sendNotification(
@@ -228,7 +239,11 @@ function sortPRs(prs, key) {
   });
 }
 
-const FALLBACK_AVATAR_SVG = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><rect fill="#555" width="20" height="20" rx="10"/></svg>');
+const FALLBACK_AVATAR_SVG =
+  'data:image/svg+xml,' +
+  encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><rect fill="#555" width="20" height="20" rx="10"/></svg>',
+  );
 
 function isSafeAvatarUrl(url) {
   return typeof url === 'string' && url.startsWith('https://');
@@ -273,7 +288,8 @@ function renderPRCard(pr) {
   // My review status
   const me = window.__ME__;
   const myReview = me && pr.reviews ? pr.reviews.filter((r) => r.login === me) : [];
-  const isReReviewRequested = me && pr.requestedReviewers && pr.requestedReviewers.some((r) => r.login === me);
+  const isReReviewRequested =
+    me && pr.requestedReviewers && pr.requestedReviewers.some((r) => r.login === me);
   const hasReviewed = myReview.length > 0;
 
   if (hasReviewed && isReReviewRequested) cardClass += ' pr-rerequested';
@@ -281,7 +297,8 @@ function renderPRCard(pr) {
 
   card.className = cardClass;
   card.style.cursor = 'pointer';
-  card.dataset.search = `${pr.title} ${pr.branch} ${pr.author?.login || ''} ${pr.assignees?.map((a) => a.login).join(' ') || ''} #${pr.number}`.toLowerCase();
+  card.dataset.search =
+    `${pr.title} ${pr.branch} ${pr.author?.login || ''} ${pr.assignees?.map((a) => a.login).join(' ') || ''} #${pr.number}`.toLowerCase();
 
   // Extract owner/repo from url (https://github.com/owner/repo/pull/123)
   const urlParts = pr.url.replace('https://github.com/', '').split('/');
@@ -353,14 +370,26 @@ function renderPRCard(pr) {
   if (pr.ciStatus) {
     const ci = document.createElement('span');
     ci.className = 'pr-ci-icon';
-    if (pr.ciStatus.state === 'success') { ci.classList.add('success'); ci.textContent = '\u2713'; ci.title = `CI passing (${pr.ciStatus.total})`; }
-    else if (pr.ciStatus.state === 'failure' || pr.ciStatus.state === 'error') { ci.classList.add('failure'); ci.textContent = '\u2717'; ci.title = `CI failed`; }
-    else if (pr.ciStatus.state === 'pending') { ci.classList.add('pending'); ci.textContent = '\u25F7'; ci.title = `CI pending`; }
+    if (pr.ciStatus.state === 'success') {
+      ci.classList.add('success');
+      ci.textContent = '\u2713';
+      ci.title = `CI passing (${pr.ciStatus.total})`;
+    } else if (pr.ciStatus.state === 'failure' || pr.ciStatus.state === 'error') {
+      ci.classList.add('failure');
+      ci.textContent = '\u2717';
+      ci.title = `CI failed`;
+    } else if (pr.ciStatus.state === 'pending') {
+      ci.classList.add('pending');
+      ci.textContent = '\u25F7';
+      ci.title = `CI pending`;
+    }
     meta.appendChild(ci);
   }
 
   // Stale warning
-  const ageDays = Math.floor((Date.now() - new Date(pr.updatedAt).getTime()) / (1000 * 60 * 60 * 24));
+  const ageDays = Math.floor(
+    (Date.now() - new Date(pr.updatedAt).getTime()) / (1000 * 60 * 60 * 24),
+  );
   if (ageDays >= 14) {
     const warn = document.createElement('span');
     warn.className = 'pr-stale-icon stale-strong';
@@ -460,7 +489,10 @@ function renderLabels(labels) {
     const more = document.createElement('span');
     more.className = 'pr-label pr-label-more';
     more.textContent = `+${labels.length - MAX_VISIBLE_LABELS} more`;
-    more.title = labels.slice(MAX_VISIBLE_LABELS).map((l) => l.name).join(', ');
+    more.title = labels
+      .slice(MAX_VISIBLE_LABELS)
+      .map((l) => l.name)
+      .join(', ');
     container.appendChild(more);
   }
   return container;
@@ -542,7 +574,8 @@ function renderRepoSection(repoData) {
       loadMore.className = 'load-more-btn';
       loadMore.textContent = `Load more (${sorted.length - limit} more)`;
       loadMore.addEventListener('click', () => {
-        const newLimit = (displayLimit.get(repoData.repo) || INITIAL_DISPLAY_LIMIT) + LOAD_MORE_INCREMENT;
+        const newLimit =
+          (displayLimit.get(repoData.repo) || INITIAL_DISPLAY_LIMIT) + LOAD_MORE_INCREMENT;
         displayLimit.set(repoData.repo, newLimit);
         renderCardsInGrid(grid, sorted, newLimit);
         if (sorted.length > newLimit) {
@@ -586,7 +619,12 @@ async function loadSingleRepo(repoId) {
   try {
     const data = await api.prsForRepo(owner, name, true);
     loadingSection.remove();
-    const repoData = { repo: data.repo, prs: data.prs, error: null, paused: lastDataPaused(repoId) };
+    const repoData = {
+      repo: data.repo,
+      prs: data.prs,
+      error: null,
+      paused: lastDataPaused(repoId),
+    };
     const newSection = renderRepoSection(repoData);
     main.insertBefore(newSection, main.firstChild);
     upsertLastDataRepo(repoData);
@@ -597,7 +635,12 @@ async function loadSingleRepo(repoId) {
     reapplySearchFilter();
   } catch (err) {
     loadingSection.remove();
-    upsertLastDataRepo({ repo: repoId, prs: [], error: err.message, paused: lastDataPaused(repoId) });
+    upsertLastDataRepo({
+      repo: repoId,
+      prs: [],
+      error: err.message,
+      paused: lastDataPaused(repoId),
+    });
     showToast(`Failed to load ${repoId}: ${err.message}`, 'error');
   } finally {
     if (wasPolling) startPolling({ skipImmediate: true });
@@ -659,6 +702,7 @@ async function loadPRs() {
   try {
     const data = await api.prs(true);
     lastData = data;
+    writeCache(CACHE_KEYS.prs, data);
     detectChangesAndNotify(data);
     updateStats(data);
 
@@ -971,7 +1015,10 @@ async function showRepoSelectionScreen(onRepoChange) {
 
   searchBtn.addEventListener('click', doSearch);
   searchInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); doSearch(); }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      doSearch();
+    }
   });
   searchInput.addEventListener('input', () => {
     clearTimeout(searchTimeout);
@@ -997,7 +1044,11 @@ async function showRepoSelectionScreen(onRepoChange) {
     setLoading(true, `Adding ${repos.length} repo(s)...`);
     try {
       for (const repo of repos) {
-        try { await api.addRepo(repo); } catch { /* skip duplicates */ }
+        try {
+          await api.addRepo(repo);
+        } catch {
+          /* skip duplicates */
+        }
       }
       showToast(`${repos.length} repo(s) added`);
       await onRepoChange();
@@ -1028,8 +1079,6 @@ async function showRepoSelectionScreen(onRepoChange) {
 
   main.appendChild(container);
 }
-
-
 
 // ============================
 // Detail Pane
@@ -1070,22 +1119,25 @@ function openDetailPane(owner, repo, number, title) {
   loadingEl.textContent = 'Loading...';
   content.appendChild(loadingEl);
 
-  api.prDetail(owner, repo, number).then((detail) => {
-    paneCache.set(key, { data: detail, fetchedAt: Date.now() });
-    // Keep cache size bounded
-    if (paneCache.size > 50) {
-      const oldestKey = paneCache.keys().next().value;
-      paneCache.delete(oldestKey);
-    }
-    content.textContent = '';
-    renderDetailContent(content, detail);
-  }).catch((err) => {
-    content.textContent = '';
-    const errEl = document.createElement('div');
-    errEl.className = 'detail-loading';
-    errEl.textContent = 'Failed to load: ' + err.message;
-    content.appendChild(errEl);
-  });
+  api
+    .prDetail(owner, repo, number)
+    .then((detail) => {
+      paneCache.set(key, { data: detail, fetchedAt: Date.now() });
+      // Keep cache size bounded
+      if (paneCache.size > 50) {
+        const oldestKey = paneCache.keys().next().value;
+        paneCache.delete(oldestKey);
+      }
+      content.textContent = '';
+      renderDetailContent(content, detail);
+    })
+    .catch((err) => {
+      content.textContent = '';
+      const errEl = document.createElement('div');
+      errEl.className = 'detail-loading';
+      errEl.textContent = 'Failed to load: ' + err.message;
+      content.appendChild(errEl);
+    });
 }
 
 async function runSummarize(card, btn, text) {
@@ -1206,9 +1258,16 @@ function renderDetailContent(container, detail) {
   meta.className = 'detail-meta';
 
   let mergeValue, mergeCls;
-  if (detail.mergeable === false) { mergeValue = 'Conflicts'; mergeCls = 'deletions'; }
-  else if (detail.mergeable === true) { mergeValue = 'Mergeable'; mergeCls = 'additions'; }
-  else { mergeValue = 'Checking...'; mergeCls = ''; }
+  if (detail.mergeable === false) {
+    mergeValue = 'Conflicts';
+    mergeCls = 'deletions';
+  } else if (detail.mergeable === true) {
+    mergeValue = 'Mergeable';
+    mergeCls = 'additions';
+  } else {
+    mergeValue = 'Checking...';
+    mergeCls = '';
+  }
 
   const behindValue = typeof detail.behindBy === 'number' ? `↓ ${detail.behindBy}` : '—';
   const aheadValue = typeof detail.aheadBy === 'number' ? `↑ ${detail.aheadBy}` : '—';
@@ -1219,7 +1278,11 @@ function renderDetailContent(container, detail) {
     { label: 'Additions', value: `+${detail.additions}`, cls: 'additions' },
     { label: 'Deletions', value: `-${detail.deletions}`, cls: 'deletions' },
     { label: 'Merge', value: mergeValue, cls: mergeCls },
-    { label: `vs ${detail.baseBranch}`, value: `${behindValue} / ${aheadValue}`, cls: detail.behindBy >= 10 ? 'deletions' : '' },
+    {
+      label: `vs ${detail.baseBranch}`,
+      value: `${behindValue} / ${aheadValue}`,
+      cls: detail.behindBy >= 10 ? 'deletions' : '',
+    },
   ];
 
   items.forEach((item) => {
@@ -1319,7 +1382,9 @@ function renderDetailContent(container, detail) {
       aiBtn.textContent = 'AIで要約';
       aiBtn.addEventListener('click', async (e) => {
         e.stopPropagation();
-        const allText = thread.comments.map((c) => `${c.author?.login || 'unknown'}: ${c.body}`).join('\n\n');
+        const allText = thread.comments
+          .map((c) => `${c.author?.login || 'unknown'}: ${c.body}`)
+          .join('\n\n');
         await runSummarize(card, aiBtn, allText);
       });
       headerRow.appendChild(aiBtn);
@@ -1422,6 +1487,37 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 
+function applyUserToHeader(user) {
+  if (!user) return;
+  window.__ME__ = user.login;
+  const userNameEl = document.getElementById('user-name');
+  const userAvatarEl = document.getElementById('user-avatar');
+  if (userNameEl) userNameEl.textContent = user.login;
+  if (userAvatarEl && user.avatarUrl) userAvatarEl.src = user.avatarUrl;
+}
+
+function paintFromCache() {
+  // Best-effort instant repaint after a hard reload. We render whatever
+  // cached state we have (header user + dashboard PRs) so the screen isn't
+  // blank while the fresh API calls are in flight. Sidebar gets re-painted
+  // by the standard renderRepoList() flow shortly after.
+  const cachedMe = readCache(CACHE_KEYS.me);
+  if (cachedMe?.data) applyUserToHeader(cachedMe.data);
+
+  const cachedPrs = readCache(CACHE_KEYS.prs);
+  if (cachedPrs?.data?.repos) {
+    lastData = cachedPrs.data;
+    lastFetchAt = cachedPrs.at;
+    updateStats(cachedPrs.data);
+    const main = document.getElementById('pr-content');
+    if (main) {
+      reconcileRepoSections(main, cachedPrs.data.repos);
+      lastRenderSig = renderSignature(cachedPrs.data);
+    }
+    updateLastUpdatedDisplay();
+  }
+}
+
 // Init
 async function init() {
   requestNotificationPermission();
@@ -1432,28 +1528,27 @@ async function init() {
     return;
   }
 
+  // Repaint from localStorage BEFORE any network call so a hard reload shows
+  // the previous dashboard immediately. The fresh fetch below replaces it.
+  paintFromCache();
+
   let me;
   try {
     const { user } = await api.authMe();
     me = user;
+    writeCache(CACHE_KEYS.me, user);
   } catch {
     clearStoredToken();
     window.location.href = '/setup.html';
     return;
   }
 
-  // Authenticated - set user info
-  window.__ME__ = me.login;
-  const userNameEl = document.getElementById('user-name');
-  const userAvatarEl = document.getElementById('user-avatar');
-  if (userNameEl) userNameEl.textContent = me.login;
-  if (userAvatarEl) userAvatarEl.src = me.avatarUrl;
+  applyUserToHeader(me);
 
   const onRepoChange = async (changeOrAddedId) => {
     // Backwards compat: a bare string means "added repo".
-    const change = typeof changeOrAddedId === 'string'
-      ? { added: changeOrAddedId }
-      : (changeOrAddedId || {});
+    const change =
+      typeof changeOrAddedId === 'string' ? { added: changeOrAddedId } : changeOrAddedId || {};
 
     // Lightweight in-place update: pause toggle doesn't need a server refetch
     // or full sidebar rebuild. Just sync lastData so subsequent rerenders show
@@ -1487,6 +1582,7 @@ async function init() {
 
   // Initial scan: show repo selection screen if no repos watched
   const { repos: watchedRepos } = await api.repos();
+  writeCache(CACHE_KEYS.repos, watchedRepos);
   if (watchedRepos.length === 0 && !hasRunInitialScan) {
     hasRunInitialScan = true;
     await showRepoSelectionScreen(onRepoChange);
@@ -1503,7 +1599,12 @@ async function init() {
 
   // Refresh
   document.getElementById('btn-refresh')?.addEventListener('click', async () => {
-    if (!(await confirmDialog('全リポジトリの最新データを取得します。GitHub API への負荷が高い処理です。実行しますか？'))) return;
+    if (
+      !(await confirmDialog(
+        '全リポジトリの最新データを取得します。GitHub API への負荷が高い処理です。実行しますか？',
+      ))
+    )
+      return;
 
     setLoading(true, 'Refreshing PR data...');
     paneCache.clear();

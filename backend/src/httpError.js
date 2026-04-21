@@ -21,10 +21,18 @@ export function sendError(res, status, code, message) {
 // handlers don't each invent their own mapping.
 export function mapGithubError(err) {
   if (err && err.status === 401) {
-    return { status: 401, code: ERROR_CODES.GITHUB_TOKEN_EXPIRED, message: 'GitHub token is invalid' };
+    return {
+      status: 401,
+      code: ERROR_CODES.GITHUB_TOKEN_EXPIRED,
+      message: 'GitHub token is invalid',
+    };
   }
   if (err && err.status === 403) {
-    return { status: 429, code: ERROR_CODES.RATE_LIMITED, message: 'GitHub API rate limit exceeded' };
+    return {
+      status: 429,
+      code: ERROR_CODES.RATE_LIMITED,
+      message: 'GitHub API rate limit exceeded',
+    };
   }
   return null;
 }
