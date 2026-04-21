@@ -21,9 +21,12 @@ export async function verifyRepo(token, owner, repo) {
 }
 
 export async function searchRepos(token, query) {
-  const res = await fetch(`${API_BASE}/search/repositories?q=${encodeURIComponent(query)}&per_page=20`, {
-    headers: headers(token),
-  });
+  const res = await fetch(
+    `${API_BASE}/search/repositories?q=${encodeURIComponent(query)}&per_page=20`,
+    {
+      headers: headers(token),
+    },
+  );
   if (!res.ok) throw Object.assign(new Error('GitHub API error'), { status: res.status });
   const data = await res.json();
   return data.items.map((item) => ({
@@ -35,14 +38,21 @@ export async function searchRepos(token, query) {
 
 export async function listUserRepos(token, query) {
   // List repos the authenticated user has access to, filtered by name
-  const res = await fetch(`${API_BASE}/user/repos?per_page=100&sort=updated&affiliation=owner,collaborator,organization_member`, {
-    headers: headers(token),
-  });
+  const res = await fetch(
+    `${API_BASE}/user/repos?per_page=100&sort=updated&affiliation=owner,collaborator,organization_member`,
+    {
+      headers: headers(token),
+    },
+  );
   if (!res.ok) return [];
   const data = await res.json();
   const q = query.toLowerCase();
   return data
-    .filter((item) => item.full_name.toLowerCase().includes(q) || (item.description || '').toLowerCase().includes(q))
+    .filter(
+      (item) =>
+        item.full_name.toLowerCase().includes(q) ||
+        (item.description || '').toLowerCase().includes(q),
+    )
     .map((item) => ({
       fullName: item.full_name,
       description: item.description || '',
@@ -124,7 +134,10 @@ async function gqlWithRetry(token, query, variables, repoFullName, attempts = 3)
         signal: AbortSignal.timeout(30000),
       });
       if (res.status >= 500 && i < attempts - 1) {
-        lastErr = Object.assign(new Error('GitHub API error'), { status: res.status, repoFullName });
+        lastErr = Object.assign(new Error('GitHub API error'), {
+          status: res.status,
+          repoFullName,
+        });
         await new Promise((r) => setTimeout(r, 1000 * (i + 1)));
         continue;
       }
@@ -133,7 +146,11 @@ async function gqlWithRetry(token, query, variables, repoFullName, attempts = 3)
       }
       const json = await res.json();
       if (json.errors && (!json.data || !json.data.repository)) {
-        throw Object.assign(new Error('GitHub GraphQL error'), { status: 502, repoFullName, errors: json.errors });
+        throw Object.assign(new Error('GitHub GraphQL error'), {
+          status: 502,
+          repoFullName,
+          errors: json.errors,
+        });
       }
       return json;
     } catch (err) {
@@ -183,9 +200,7 @@ export async function fetchOpenPRs(token, repoFullName) {
     );
 
     const rollupState = pr.commits?.nodes?.[0]?.commit?.statusCheckRollup?.state || null;
-    const ciStatus = rollupState
-      ? { state: mapRollupState(rollupState), total: null }
-      : null;
+    const ciStatus = rollupState ? { state: mapRollupState(rollupState), total: null } : null;
 
     // Translate GraphQL enums into the lower-cased values the REST API returned.
     const mergeable = mapMergeable(pr.mergeable);
@@ -207,7 +222,10 @@ export async function fetchOpenPRs(token, repoFullName) {
         : { login: 'ghost', avatarUrl: '' },
       branch: pr.headRefName,
       baseBranch: pr.baseRefName,
-      assignees: (pr.assignees?.nodes || []).map((a) => ({ login: a.login, avatarUrl: a.avatarUrl })),
+      assignees: (pr.assignees?.nodes || []).map((a) => ({
+        login: a.login,
+        avatarUrl: a.avatarUrl,
+      })),
       requestedReviewers,
       reviewStatus,
       reviews,
@@ -374,7 +392,12 @@ async function fetchUnresolvedThreads(token, owner, repo, number) {
     }
   `;
   try {
-    const json = await gqlWithRetry(token, query, { owner, repo, number }, `${owner}/${repo}#${number}`);
+    const json = await gqlWithRetry(
+      token,
+      query,
+      { owner, repo, number },
+      `${owner}/${repo}#${number}`,
+    );
     const threads = json.data?.repository?.pullRequest?.reviewThreads?.nodes || [];
     const items = threads
       .filter((t) => !t.isResolved && !t.isOutdated)
@@ -400,7 +423,9 @@ export async function fetchPRDetail(token, owner, repo, number) {
 
   const [prRes, filesRes, threadsResult] = await Promise.all([
     fetch(`${API_BASE}/repos/${repoFullName}/pulls/${number}`, { headers: headers(token) }),
-    fetch(`${API_BASE}/repos/${repoFullName}/pulls/${number}/files?per_page=100`, { headers: headers(token) }),
+    fetch(`${API_BASE}/repos/${repoFullName}/pulls/${number}/files?per_page=100`, {
+      headers: headers(token),
+    }),
     fetchUnresolvedThreads(token, owner, repo, number),
   ]);
 
@@ -413,7 +438,9 @@ export async function fetchPRDetail(token, owner, repo, number) {
   const compare = await fetch(
     `${API_BASE}/repos/${repoFullName}/compare/${encodeURIComponent(pr.base.ref)}...${encodeURIComponent(pr.head.ref)}`,
     { headers: headers(token) },
-  ).then((r) => r.ok ? r.json() : null).catch(() => null);
+  )
+    .then((r) => (r.ok ? r.json() : null))
+    .catch(() => null);
 
   return {
     number: pr.number,

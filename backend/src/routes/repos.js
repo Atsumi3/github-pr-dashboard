@@ -19,12 +19,22 @@ router.post('/api/repos', async (req, res) => {
 
   const exists = await github.verifyRepo(req.token, parsed.owner, parsed.name);
   if (!exists) {
-    return sendError(res, 404, ERROR_CODES.REPO_NOT_FOUND, `Repository ${parsed.id} not found or inaccessible`);
+    return sendError(
+      res,
+      404,
+      ERROR_CODES.REPO_NOT_FOUND,
+      `Repository ${parsed.id} not found or inaccessible`,
+    );
   }
 
   const added = await store.addRepo(parsed.id);
   if (!added) {
-    return sendError(res, 409, ERROR_CODES.REPO_ALREADY_EXISTS, `Repository ${parsed.id} is already in the watch list`);
+    return sendError(
+      res,
+      409,
+      ERROR_CODES.REPO_ALREADY_EXISTS,
+      `Repository ${parsed.id} is already in the watch list`,
+    );
   }
 
   console.log(`Repos: added ${parsed.id}`);
@@ -34,7 +44,12 @@ router.post('/api/repos', async (req, res) => {
 router.patch('/api/repos/:owner/:name', async (req, res) => {
   const { owner, name } = req.params;
   if (!validateOwnerName(owner, name)) {
-    return sendError(res, 400, ERROR_CODES.INVALID_REQUEST, 'owner and name must match ^[A-Za-z0-9_.-]+$');
+    return sendError(
+      res,
+      400,
+      ERROR_CODES.INVALID_REQUEST,
+      'owner and name must match ^[A-Za-z0-9_.-]+$',
+    );
   }
   const id = `${owner}/${name}`;
   const { paused } = req.body;
@@ -43,7 +58,12 @@ router.patch('/api/repos/:owner/:name', async (req, res) => {
   }
   const ok = await store.setRepoPaused(id, paused);
   if (!ok) {
-    return sendError(res, 404, ERROR_CODES.REPO_NOT_FOUND, `Repository ${id} is not in the watch list`);
+    return sendError(
+      res,
+      404,
+      ERROR_CODES.REPO_NOT_FOUND,
+      `Repository ${id} is not in the watch list`,
+    );
   }
   console.log(`Repos: ${id} paused=${paused}`);
   res.json({ status: 'ok', repo: { id, paused } });
@@ -52,12 +72,22 @@ router.patch('/api/repos/:owner/:name', async (req, res) => {
 router.delete('/api/repos/:owner/:name', async (req, res) => {
   const { owner, name } = req.params;
   if (!validateOwnerName(owner, name)) {
-    return sendError(res, 400, ERROR_CODES.INVALID_REQUEST, 'owner and name must match ^[A-Za-z0-9_.-]+$');
+    return sendError(
+      res,
+      400,
+      ERROR_CODES.INVALID_REQUEST,
+      'owner and name must match ^[A-Za-z0-9_.-]+$',
+    );
   }
   const id = `${owner}/${name}`;
   const removed = await store.removeRepo(id);
   if (!removed) {
-    return sendError(res, 404, ERROR_CODES.REPO_NOT_FOUND, `Repository ${id} is not in the watch list`);
+    return sendError(
+      res,
+      404,
+      ERROR_CODES.REPO_NOT_FOUND,
+      `Repository ${id} is not in the watch list`,
+    );
   }
   console.log(`Repos: removed ${id}`);
   res.json({ status: 'ok' });

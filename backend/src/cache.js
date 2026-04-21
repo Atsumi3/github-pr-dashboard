@@ -25,6 +25,8 @@ export function clear() {
 export function upsertRepo(repoId, repoData) {
   // Update a single repo entry without touching cachedAt — partial updates
   // must not claim "the whole snapshot was refreshed at this time".
+  // The internal array order is intentionally unstable here; consumers must
+  // re-order against the watched list (see buildResponse in routes/prs.js).
   if (!cached) return;
   const next = cached.filter((r) => r.repo !== repoId);
   next.push(repoData);

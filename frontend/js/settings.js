@@ -96,8 +96,10 @@ function renderDropdown(items, dropdown, searchInput, onRepoChange) {
   });
 }
 
-const EYE_OPEN_PATH = 'M1.679 7.932c.412-.621 1.242-1.75 2.366-2.717C5.175 4.242 6.527 3.5 8 3.5s2.825.742 3.955 1.715c1.124.967 1.954 2.096 2.366 2.717a.119.119 0 010 .136c-.412.621-1.242 1.75-2.366 2.717C10.825 11.758 9.473 12.5 8 12.5s-2.825-.742-3.955-1.715C2.92 9.818 2.09 8.689 1.679 8.068a.119.119 0 010-.136zM8 2c-1.981 0-3.67.992-4.933 2.078C1.797 5.169.88 6.423.43 7.1a1.619 1.619 0 000 1.798c.45.678 1.367 1.932 2.637 3.024C4.329 13.008 6.019 14 8 14c1.981 0 3.67-.992 4.933-2.078 1.27-1.091 2.187-2.345 2.637-3.023a1.619 1.619 0 000-1.798c-.45-.678-1.367-1.932-2.637-3.023C11.671 2.992 9.981 2 8 2zm0 8a2 2 0 100-4 2 2 0 000 4z';
-const EYE_CLOSED_PATH = 'M.143 2.31a.75.75 0 011.047-.167l14.5 10.5a.75.75 0 11-.88 1.214l-2.248-1.628C11.346 13.323 9.792 14 8 14c-1.981 0-3.67-.992-4.933-2.078C1.797 10.832.88 9.577.43 8.9a1.619 1.619 0 010-1.798c.529-.795 1.625-2.227 3.149-3.355L.31 3.357A.75.75 0 01.143 2.31zm1.536 5.622A14.067 14.067 0 002.625 9.4l.012.014c.41.587 1.082 1.367 1.962 1.957L4.6 11.4l5.69 4.117zm12.642-.864a.119.119 0 010 .136c-.328.494-.916 1.31-1.708 2.107l-1.097-.795A2 2 0 008.087 6.012L5.97 4.479A6.95 6.95 0 018 4c1.473 0 2.825.742 3.955 1.715 1.124.967 1.954 2.096 2.366 2.717z';
+const EYE_OPEN_PATH =
+  'M1.679 7.932c.412-.621 1.242-1.75 2.366-2.717C5.175 4.242 6.527 3.5 8 3.5s2.825.742 3.955 1.715c1.124.967 1.954 2.096 2.366 2.717a.119.119 0 010 .136c-.412.621-1.242 1.75-2.366 2.717C10.825 11.758 9.473 12.5 8 12.5s-2.825-.742-3.955-1.715C2.92 9.818 2.09 8.689 1.679 8.068a.119.119 0 010-.136zM8 2c-1.981 0-3.67.992-4.933 2.078C1.797 5.169.88 6.423.43 7.1a1.619 1.619 0 000 1.798c.45.678 1.367 1.932 2.637 3.024C4.329 13.008 6.019 14 8 14c1.981 0 3.67-.992 4.933-2.078 1.27-1.091 2.187-2.345 2.637-3.023a1.619 1.619 0 000-1.798c-.45-.678-1.367-1.932-2.637-3.023C11.671 2.992 9.981 2 8 2zm0 8a2 2 0 100-4 2 2 0 000 4z';
+const EYE_CLOSED_PATH =
+  'M.143 2.31a.75.75 0 011.047-.167l14.5 10.5a.75.75 0 11-.88 1.214l-2.248-1.628C11.346 13.323 9.792 14 8 14c-1.981 0-3.67-.992-4.933-2.078C1.797 10.832.88 9.577.43 8.9a1.619 1.619 0 010-1.798c.529-.795 1.625-2.227 3.149-3.355L.31 3.357A.75.75 0 01.143 2.31zm1.536 5.622A14.067 14.067 0 002.625 9.4l.012.014c.41.587 1.082 1.367 1.962 1.957L4.6 11.4l5.69 4.117zm12.642-.864a.119.119 0 010 .136c-.328.494-.916 1.31-1.708 2.107l-1.097-.795A2 2 0 008.087 6.012L5.97 4.479A6.95 6.95 0 018 4c1.473 0 2.825.742 3.955 1.715 1.124.967 1.954 2.096 2.366 2.717z';
 
 function setEyeIcon(btn, visible) {
   while (btn.firstChild) btn.firstChild.remove();
@@ -144,7 +146,9 @@ function loadHiddenRepos() {
 function saveHiddenRepos() {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify([...hiddenRepos]));
-  } catch { /* ignore quota errors */ }
+  } catch {
+    /* ignore quota errors */
+  }
 }
 
 export function isRepoVisible(repoId) {
@@ -208,7 +212,10 @@ export async function renderRepoList(onRepoChange) {
       pauseBtn.className = 'repo-pause-btn';
       const isPaused = !!r.paused;
       if (isPaused) pauseBtn.classList.add('paused');
-      pauseBtn.setAttribute('aria-label', isPaused ? `Resume polling ${r.id}` : `Pause polling ${r.id}`);
+      pauseBtn.setAttribute(
+        'aria-label',
+        isPaused ? `Resume polling ${r.id}` : `Pause polling ${r.id}`,
+      );
       pauseBtn.title = isPaused ? '更新停止中（クリックで再開）' : '更新中（クリックで停止）';
       setPauseIcon(pauseBtn, isPaused);
       pauseBtn.addEventListener('click', async (e) => {
@@ -218,7 +225,10 @@ export async function renderRepoList(onRepoChange) {
         try {
           await api.setRepoPaused(owner, name, newPaused);
           pauseBtn.classList.toggle('paused', newPaused);
-          pauseBtn.setAttribute('aria-label', newPaused ? `Resume polling ${r.id}` : `Pause polling ${r.id}`);
+          pauseBtn.setAttribute(
+            'aria-label',
+            newPaused ? `Resume polling ${r.id}` : `Pause polling ${r.id}`,
+          );
           pauseBtn.title = newPaused ? '更新停止中（クリックで再開）' : '更新中（クリックで停止）';
           setPauseIcon(pauseBtn, newPaused);
           // Update section header badge if visible
@@ -240,7 +250,12 @@ export async function renderRepoList(onRepoChange) {
       div.appendChild(span);
 
       div.addEventListener('click', (e) => {
-        if (e.target.closest('.repo-visibility-btn') || e.target.closest('.repo-pause-btn') || e.target.closest('.delete-btn')) return;
+        if (
+          e.target.closest('.repo-visibility-btn') ||
+          e.target.closest('.repo-pause-btn') ||
+          e.target.closest('.delete-btn')
+        )
+          return;
         const target = document.querySelector(`.repo-section[data-repo="${r.id}"]`);
         if (target) {
           if (visBtn.classList.contains('hidden-repo')) {
@@ -337,7 +352,8 @@ export async function refreshAiPanel() {
     aiStatusCache = null;
     const msg = document.createElement('div');
     msg.className = 'ai-status-offline';
-    msg.textContent = err.code === 'AI_SERVER_UNAVAILABLE' ? 'ai-server 未起動' : `エラー: ${err.message}`;
+    msg.textContent =
+      err.code === 'AI_SERVER_UNAVAILABLE' ? 'ai-server 未起動' : `エラー: ${err.message}`;
     list.appendChild(msg);
   }
 }
@@ -361,7 +377,7 @@ function renderAiStatusList(list, status) {
 
     const tag = document.createElement('span');
     tag.className = 'ai-status-tag';
-    tag.textContent = name === status.cli ? '使用中' : (info.available ? '利用可' : '未インストール');
+    tag.textContent = name === status.cli ? '使用中' : info.available ? '利用可' : '未インストール';
     row.appendChild(tag);
 
     list.appendChild(row);
@@ -438,7 +454,9 @@ function renderAiSettingsDialog(status) {
   p1Reset.type = 'button';
   p1Reset.className = 'ai-prompt-reset';
   p1Reset.textContent = 'デフォルトに戻す';
-  p1Reset.addEventListener('click', () => { p1Area.value = status.defaults?.summarize || ''; });
+  p1Reset.addEventListener('click', () => {
+    p1Area.value = status.defaults?.summarize || '';
+  });
   promptRow1.appendChild(p1Reset);
   dialog.appendChild(promptRow1);
 
@@ -462,7 +480,9 @@ function renderAiSettingsDialog(status) {
   p2Reset.type = 'button';
   p2Reset.className = 'ai-prompt-reset';
   p2Reset.textContent = 'デフォルトに戻す';
-  p2Reset.addEventListener('click', () => { p2Area.value = status.defaults?.summarizePr || ''; });
+  p2Reset.addEventListener('click', () => {
+    p2Area.value = status.defaults?.summarizePr || '';
+  });
   promptRow2.appendChild(p2Reset);
   dialog.appendChild(promptRow2);
 
@@ -501,19 +521,32 @@ function renderAiSettingsDialog(status) {
   };
 
   const onKey = (e) => {
-    if (e.key === 'Escape') { e.preventDefault(); cleanup(); }
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      cleanup();
+    }
   };
 
   cancelBtn.addEventListener('click', cleanup);
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) cleanup(); });
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) cleanup();
+  });
   document.addEventListener('keydown', onKey);
 
   saveBtn.addEventListener('click', async () => {
+    // Catch the edge case where the previously-active CLI was uninstalled
+    // since the page loaded — without this, the user sees a generic 400 from
+    // ai-server with no clue about why.
+    const chosenCli = cliSelect.value;
+    if (!status.available?.[chosenCli]?.available) {
+      showToast(`${chosenCli} はホストにインストールされていません`, 'error');
+      return;
+    }
     saveBtn.disabled = true;
     saveBtn.textContent = '保存中...';
     try {
       const updated = await api.updateAiConfig({
-        cli: cliSelect.value,
+        cli: chosenCli,
         prompts: {
           summarize: p1Area.value,
           summarizePr: p2Area.value,

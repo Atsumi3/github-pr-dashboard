@@ -37,11 +37,11 @@
 
 ### 1.2 サービス構成
 
-| サービス | 役割 | ポート | ベース |
-|---------|------|--------|---------|
-| frontend | 静的配信 + ServiceWorker | 127.0.0.1:3000 → 80 | nginx:1.27-alpine |
-| backend | REST API、GitHub 呼び出し、永続化 | 3001 (内部のみ) | node:22-alpine |
-| ai-server (任意) | ホスト CLI を呼ぶ要約サーバー | 127.0.0.1:3002 | host node 20+ |
+| サービス         | 役割                              | ポート              | ベース            |
+| ---------------- | --------------------------------- | ------------------- | ----------------- |
+| frontend         | 静的配信 + ServiceWorker          | 127.0.0.1:3000 → 80 | nginx:1.27-alpine |
+| backend          | REST API、GitHub 呼び出し、永続化 | 3001 (内部のみ)     | node:22-alpine    |
+| ai-server (任意) | ホスト CLI を呼ぶ要約サーバー     | 127.0.0.1:3002      | host node 20+     |
 
 ## 2. 認証設計
 
@@ -61,6 +61,7 @@ PAT 専用。ユーザーがブラウザのセットアップ画面で GitHub Pe
 ```
 
 frontend は次の 2 経路で `X-GitHub-Token` を付与する。
+
 1. `api.js` が `request()` 内で同期的に `getToken()` → header set
 2. ServiceWorker (`sw.js`) が intercept してフォールバックで付与 (二重防御)
 
@@ -133,9 +134,7 @@ ai-server が落ちている場合は 503 + `AI_SERVER_UNAVAILABLE`。
 
 ```json
 {
-  "repos": [
-    { "id": "owner/name", "addedAt": "ISO8601", "paused": false }
-  ],
+  "repos": [{ "id": "owner/name", "addedAt": "ISO8601", "paused": false }],
   "settings": { "pollInterval": 60 }
 }
 ```
@@ -144,13 +143,13 @@ token は **保存しない**。
 
 ### 4.2 キャッシュ
 
-| 層 | 場所 | 種類 | TTL | 目的 |
-|---|------|------|-----|------|
-| 全 PR cache | backend `cache.js` | グローバル | pollInterval (60s) | poll 同時多発の thundering herd 抑制 |
-| 詳細 cache | backend `detailCache.js` | LRU 200 | pollInterval | PR 詳細の連打抑制 |
-| meCache | `routes/prs.js` | LRU 200 (sha256 hash) | 10 分 | GitHub /user 連打抑制 |
-| paneCache | frontend `app.js` | LRU 50 | 60 秒 | 詳細ペイン再 open 高速化 |
-| SW cache | frontend `sw.js` | LRU 50 + TTL ヘッダ | 5 分 | オフライン耐性 |
+| 層          | 場所                     | 種類                  | TTL                | 目的                                 |
+| ----------- | ------------------------ | --------------------- | ------------------ | ------------------------------------ |
+| 全 PR cache | backend `cache.js`       | グローバル            | pollInterval (60s) | poll 同時多発の thundering herd 抑制 |
+| 詳細 cache  | backend `detailCache.js` | LRU 200               | pollInterval       | PR 詳細の連打抑制                    |
+| meCache     | `routes/prs.js`          | LRU 200 (sha256 hash) | 10 分              | GitHub /user 連打抑制                |
+| paneCache   | frontend `app.js`        | LRU 50                | 60 秒              | 詳細ペイン再 open 高速化             |
+| SW cache    | frontend `sw.js`         | LRU 50 + TTL ヘッダ   | 5 分               | オフライン耐性                       |
 
 `buildResponse` は `(cache.version, store.reposVersion, me)` でメモ化されている。
 
@@ -265,8 +264,8 @@ backend は `expose:3001` で内部のみ。frontend が `127.0.0.1:3000:80` で
 
 ### 8.2 環境変数
 
-| 変数 | 必須 | 説明 |
-|------|------|------|
+| 変数               | 必須          | 説明                           |
+| ------------------ | ------------- | ------------------------------ |
 | `AI_SHARED_SECRET` | AI 要約使用時 | ai-server との共有シークレット |
 
 ### 8.3 Dockerfile
@@ -282,11 +281,11 @@ backend は `expose:3001` で内部のみ。frontend が `127.0.0.1:3000:80` で
 
 ## 9. PAT スコープ
 
-| スコープ | 用途 |
-|---------|------|
-| `repo` | private リポジトリ含む |
-| `public_repo` | public リポジトリのみ |
-| `read:org` | 組織メンバーの PR を取得 (suggestions に必要) |
+| スコープ      | 用途                                          |
+| ------------- | --------------------------------------------- |
+| `repo`        | private リポジトリ含む                        |
+| `public_repo` | public リポジトリのみ                         |
+| `read:org`    | 組織メンバーの PR を取得 (suggestions に必要) |
 
 ## 10. セキュリティ方針
 
