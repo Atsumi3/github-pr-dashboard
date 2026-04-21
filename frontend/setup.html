@@ -58,10 +58,26 @@
         cursor: not-allowed;
       }
       .setup-pat-hint {
+        font-size: 12px;
+        color: #888;
+        line-height: 1.55;
+        text-align: center;
+        margin-top: 4px;
+      }
+      .setup-pat-hint a {
+        color: #b6e3d9;
+        text-decoration: underline;
+        text-underline-offset: 2px;
+      }
+      .setup-pat-hint a:hover {
+        color: #d8f1ea;
+      }
+      .setup-pat-hint code {
+        font-family: 'SF Mono', 'Cascadia Code', Consolas, monospace;
         font-size: 11px;
-        color: #666;
-        line-height: 1.5;
-        text-align: left;
+        padding: 1px 4px;
+        background: #2a2a2a;
+        border-radius: 3px;
       }
     </style>
   </head>
@@ -76,23 +92,26 @@
           </svg>
         </div>
         <h1 class="setup-title">GitHub PR Dashboard</h1>
-        <p class="setup-desc">Personal Access Token を入力して<br />PR の監視を始めましょう</p>
+        <p class="setup-desc">PR の監視を始めましょう</p>
 
         <div class="setup-pat-form">
           <input
             id="pat-input"
             class="setup-pat-input"
             type="password"
-            placeholder="ghp_xxxx... (Personal Access Token)"
+            placeholder="ghp_xxxx..."
             autocomplete="off"
           />
-          <button id="btn-pat" class="btn-pat">Token で接続</button>
+          <button id="btn-pat" class="btn-pat">接続</button>
           <p class="setup-pat-hint">
-            GitHub Settings &gt; Developer settings &gt; Personal access tokens (classic)
-            で生成。<br />
-            private リポジトリも対象なら <code>repo</code>、public のみなら
-            <code>public_repo</code>。<br />
-            組織の PR も拾うなら <code>read:org</code> を併用してください。
+            Token をお持ちでなければ
+            <a
+              href="https://github.com/settings/tokens/new?scopes=repo&description=GitHub+PR+Dashboard"
+              target="_blank"
+              rel="noopener noreferrer"
+              >GitHub でここから作成</a
+            >
+            できます (<code>repo</code> スコープ)。
           </p>
         </div>
 
