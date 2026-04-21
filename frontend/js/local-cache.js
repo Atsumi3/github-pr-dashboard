@@ -36,9 +36,10 @@ export function readCache(key, ttlMs = DEFAULT_TTL_MS) {
 export function writeCache(key, data) {
   try {
     localStorage.setItem(storageKey(key), JSON.stringify({ at: Date.now(), data }));
-  } catch {
-    // QuotaExceededError or privacy-mode failure — silently skip; the next
-    // successful poll will repopulate from a smaller payload.
+  } catch (err) {
+    // QuotaExceededError or privacy-mode failure — log so this doesn't become
+    // an invisible bug when the dashboard appears to "forget" between reloads.
+    console.warn(`local-cache write skipped for ${key}:`, err?.name || err);
   }
 }
 

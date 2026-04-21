@@ -33,6 +33,8 @@ export async function fetchAllPRs(token) {
   if (inflightFetchAll) return inflightFetchAll;
   inflightFetchAll = (async () => {
     const allRepos = await store.getRepos();
+    // Intentionally do NOT clear cache when token/repos are missing — keep the
+    // last good snapshot so a transient empty state doesn't wipe the dashboard.
     if (!token || allRepos.length === 0) return;
 
     const activeRepos = allRepos.filter((r) => !r.paused);

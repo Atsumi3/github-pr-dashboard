@@ -5,31 +5,40 @@ const router = Router();
 const HOST_AI_URL = process.env.HOST_AI_URL || 'http://host.docker.internal:3002';
 const AI_SHARED_SECRET = process.env.AI_SHARED_SECRET || '';
 const AI_TIMEOUT_MS = 70000;
+const AI_QUICK_TIMEOUT_MS = 5000;
 const AI_UNAVAILABLE_MESSAGE =
   'AI server is not running. Start it with: cd ai-server && node server.js';
 
-async function callAi(path, payload) {
+// Single transport for all ai-server calls. err.code === AI_SERVER_ERROR
+// signals "ai-server responded with non-2xx"; absence of err.code (network /
+// timeout / dns) signals AI_SERVER_UNAVAILABLE downstream via sendAiError.
+async function callAi(path, { method = 'POST', payload, timeoutMs = AI_TIMEOUT_MS } = {}) {
   const headers = { 'Content-Type': 'application/json' };
   if (AI_SHARED_SECRET) headers['X-AI-Secret'] = AI_SHARED_SECRET;
   const r = await fetch(`${HOST_AI_URL}${path}`, {
-    method: 'POST',
+    method,
     headers,
-    body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(AI_TIMEOUT_MS),
+    body: payload === undefined ? undefined : JSON.stringify(payload),
+    signal: AbortSignal.timeout(timeoutMs),
   });
+  const data = await r.json().catch(() => ({}));
   if (!r.ok) {
-    const data = await r.json().catch(() => ({}));
     const err = new Error(data.error || `AI server returned ${r.status}`);
     err.code = ERROR_CODES.AI_SERVER_ERROR;
+    err.upstreamStatus = r.status;
     throw err;
   }
-  return r.json();
+  return data;
 }
 
 function sendAiError(res, err, label) {
   console.error(`${label} failed:`, err.message);
   if (err.code === ERROR_CODES.AI_SERVER_ERROR) {
-    return sendError(res, 503, ERROR_CODES.AI_SERVER_ERROR, err.message);
+    // Pass through ai-server's 4xx so the client sees real cause (e.g. 400
+    // "CLI not installed", 401 "secret mismatch") instead of a blanket 503.
+    const upstream = err.upstreamStatus;
+    const status = upstream && upstream >= 400 && upstream < 500 ? upstream : 503;
+    return sendError(res, status, ERROR_CODES.AI_SERVER_ERROR, err.message);
   }
   sendError(res, 503, ERROR_CODES.AI_SERVER_UNAVAILABLE, AI_UNAVAILABLE_MESSAGE);
 }
@@ -41,7 +50,7 @@ router.post('/api/ai/summarize', async (req, res) => {
   }
 
   try {
-    const data = await callAi('/summarize', { text });
+    const data = await callAi('/summarize', { payload: { text } });
     res.json(data);
   } catch (err) {
     sendAiError(res, err, 'AI summarize');
@@ -50,52 +59,23 @@ router.post('/api/ai/summarize', async (req, res) => {
 
 router.get('/api/ai/status', async (_req, res) => {
   try {
-    const headers = {};
-    if (AI_SHARED_SECRET) headers['X-AI-Secret'] = AI_SHARED_SECRET;
-    const r = await fetch(`${HOST_AI_URL}/status`, {
-      method: 'GET',
-      headers,
-      signal: AbortSignal.timeout(5000),
-    });
-    if (!r.ok) {
-      const data = await r.json().catch(() => ({}));
-      return sendError(
-        res,
-        503,
-        ERROR_CODES.AI_SERVER_ERROR,
-        data.error || `AI server returned ${r.status}`,
-      );
-    }
-    res.json(await r.json());
+    const data = await callAi('/status', { method: 'GET', timeoutMs: AI_QUICK_TIMEOUT_MS });
+    res.json(data);
   } catch (err) {
-    console.error('AI status fetch failed:', err.message);
-    sendError(res, 503, ERROR_CODES.AI_SERVER_UNAVAILABLE, AI_UNAVAILABLE_MESSAGE);
+    sendAiError(res, err, 'AI status fetch');
   }
 });
 
 router.put('/api/ai/config', async (req, res) => {
   try {
-    const headers = { 'Content-Type': 'application/json' };
-    if (AI_SHARED_SECRET) headers['X-AI-Secret'] = AI_SHARED_SECRET;
-    const r = await fetch(`${HOST_AI_URL}/config`, {
+    const data = await callAi('/config', {
       method: 'PUT',
-      headers,
-      body: JSON.stringify(req.body || {}),
-      signal: AbortSignal.timeout(5000),
+      payload: req.body || {},
+      timeoutMs: AI_QUICK_TIMEOUT_MS,
     });
-    const data = await r.json().catch(() => ({}));
-    if (!r.ok) {
-      return sendError(
-        res,
-        r.status === 400 ? 400 : 503,
-        ERROR_CODES.AI_SERVER_ERROR,
-        data.error || `AI server returned ${r.status}`,
-      );
-    }
     res.json(data);
   } catch (err) {
-    console.error('AI config update failed:', err.message);
-    sendError(res, 503, ERROR_CODES.AI_SERVER_UNAVAILABLE, AI_UNAVAILABLE_MESSAGE);
+    sendAiError(res, err, 'AI config update');
   }
 });
 
@@ -117,7 +97,9 @@ router.post('/api/ai/summarize-pr', async (req, res) => {
     : [];
 
   try {
-    const data = await callAi('/summarize-pr', { title, body: body || '', files: safeFiles });
+    const data = await callAi('/summarize-pr', {
+      payload: { title, body: body || '', files: safeFiles },
+    });
     res.json(data);
   } catch (err) {
     sendAiError(res, err, 'AI summarize-pr');

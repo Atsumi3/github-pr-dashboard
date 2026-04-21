@@ -145,6 +145,11 @@ function runCLI(prompt) {
   });
 }
 
+function sendJson(res, status, payload) {
+  res.writeHead(status, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(payload));
+}
+
 function buildStatus() {
   return {
     cli: runtimeConfig.cli,
@@ -193,58 +198,66 @@ const server = http.createServer(async (req, res) => {
       const body = await readBody(req);
       const update = JSON.parse(body);
 
+      // Validate everything BEFORE mutating runtimeConfig. Without this a
+      // partial-failure update (e.g. valid cli + invalid summarizePr) would
+      // commit the cli change to memory but never reach saveConfig(), leaving
+      // memory and disk out of sync.
+      const validated = {};
       if (update.cli !== undefined) {
         if (typeof update.cli !== 'string' || !update.cli.trim()) {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'cli must be a non-empty string' }));
-          return;
+          return sendJson(res, 400, { error: 'cli must be a non-empty string' });
         }
+        // Re-detect just-in-time so a CLI that was installed after server
+        // startup is recognised, and one that was removed is rejected.
+        availableClis[update.cli] = await detectCli(update.cli);
         if (!availableClis[update.cli]?.available) {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: `CLI '${update.cli}' is not installed on host` }));
-          return;
+          return sendJson(res, 400, { error: `CLI '${update.cli}' is not installed on host` });
         }
-        runtimeConfig.cli = update.cli;
+        validated.cli = update.cli;
       }
       if (update.cliArgs !== undefined) {
         if (!Array.isArray(update.cliArgs) || update.cliArgs.some((a) => typeof a !== 'string')) {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'cliArgs must be an array of strings' }));
-          return;
+          return sendJson(res, 400, { error: 'cliArgs must be an array of strings' });
         }
-        runtimeConfig.cliArgs = update.cliArgs;
+        validated.cliArgs = update.cliArgs;
       }
       if (update.prompts !== undefined) {
         if (typeof update.prompts !== 'object' || update.prompts === null) {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'prompts must be an object' }));
-          return;
+          return sendJson(res, 400, { error: 'prompts must be an object' });
         }
+        const promptsPatch = {};
         if (update.prompts.summarize !== undefined) {
           if (typeof update.prompts.summarize !== 'string') {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'prompts.summarize must be a string' }));
-            return;
+            return sendJson(res, 400, { error: 'prompts.summarize must be a string' });
           }
-          runtimeConfig.prompts.summarize = update.prompts.summarize;
+          promptsPatch.summarize = update.prompts.summarize;
         }
         if (update.prompts.summarizePr !== undefined) {
           if (typeof update.prompts.summarizePr !== 'string') {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'prompts.summarizePr must be a string' }));
-            return;
+            return sendJson(res, 400, { error: 'prompts.summarizePr must be a string' });
           }
-          runtimeConfig.prompts.summarizePr = update.prompts.summarizePr;
+          promptsPatch.summarizePr = update.prompts.summarizePr;
         }
+        validated.prompts = promptsPatch;
       }
 
-      await saveConfig();
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(buildStatus()));
+      // Snapshot for rollback if disk write fails.
+      const snapshot = structuredClone(runtimeConfig);
+      if (validated.cli !== undefined) runtimeConfig.cli = validated.cli;
+      if (validated.cliArgs !== undefined) runtimeConfig.cliArgs = validated.cliArgs;
+      if (validated.prompts) Object.assign(runtimeConfig.prompts, validated.prompts);
+
+      try {
+        await saveConfig();
+      } catch (saveErr) {
+        runtimeConfig = snapshot;
+        throw saveErr;
+      }
+
+      sendJson(res, 200, buildStatus());
     } catch (err) {
       console.error('Config update failed:', err.message);
-      res.writeHead(500, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: err.message }));
+      sendJson(res, 500, { error: err.message });
     }
     return;
   }

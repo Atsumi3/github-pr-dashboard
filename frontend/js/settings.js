@@ -534,11 +534,19 @@ function renderAiSettingsDialog(status) {
   document.addEventListener('keydown', onKey);
 
   saveBtn.addEventListener('click', async () => {
+    // Catch the edge case where the previously-active CLI was uninstalled
+    // since the page loaded — without this, the user sees a generic 400 from
+    // ai-server with no clue about why.
+    const chosenCli = cliSelect.value;
+    if (!status.available?.[chosenCli]?.available) {
+      showToast(`${chosenCli} はホストにインストールされていません`, 'error');
+      return;
+    }
     saveBtn.disabled = true;
     saveBtn.textContent = '保存中...';
     try {
       const updated = await api.updateAiConfig({
-        cli: cliSelect.value,
+        cli: chosenCli,
         prompts: {
           summarize: p1Area.value,
           summarizePr: p2Area.value,

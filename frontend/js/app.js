@@ -696,11 +696,13 @@ function renderSignature(data) {
 }
 
 async function loadPRs() {
-  lastFetchAt = Date.now();
-  updateLastUpdatedDisplay();
   const main = document.getElementById('pr-content');
   try {
     const data = await api.prs(true);
+    // Update lastFetchAt only on success — otherwise paintFromCache's stamp
+    // gets overwritten with "now" while we're still showing stale data.
+    lastFetchAt = Date.now();
+    updateLastUpdatedDisplay();
     lastData = data;
     writeCache(CACHE_KEYS.prs, data);
     detectChangesAndNotify(data);
