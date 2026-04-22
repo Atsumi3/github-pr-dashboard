@@ -11,7 +11,7 @@ import {
   isRepoVisible,
   confirmDialog,
 } from './settings.js';
-import { readCache, writeCache, CACHE_KEYS } from './local-cache.js';
+import { readCache, writeCache, CACHE_KEYS, readAiSummary, writeAiSummary } from './local-cache.js';
 
 let pollTimer = null;
 let hasRunInitialScan = false;
@@ -1263,11 +1263,51 @@ function openDetailPane(owner, repo, number, title) {
     });
 }
 
-async function runSummarize(card, btn, text) {
-  let summaryEl = card.querySelector('.detail-ai-summary');
-  if (summaryEl) summaryEl.remove();
+function paneContext() {
+  const pane = document.getElementById('detail-pane');
+  if (!pane) return null;
+  const owner = pane.dataset.owner;
+  const repo = pane.dataset.repo;
+  const number = pane.dataset.number;
+  if (!owner || !repo || !number) return null;
+  return { owner, repo, number, prKey: `pr:${owner}/${repo}#${number}` };
+}
 
-  summaryEl = document.createElement('div');
+function threadCacheKey(ctx, thread) {
+  return `thread:${ctx.owner}/${ctx.repo}#${ctx.number}:${thread.path}:${thread.line ?? 0}`;
+}
+
+function relativeAge(at) {
+  const sec = Math.max(0, Math.floor((Date.now() - at) / 1000));
+  if (sec < 60) return 'たった今';
+  if (sec < 3600) return `${Math.floor(sec / 60)}分前`;
+  if (sec < 86400) return `${Math.floor(sec / 3600)}時間前`;
+  return `${Math.floor(sec / 86400)}日前`;
+}
+
+function renderSummaryInto(host, kind, { summary, cli, at }) {
+  const existing = host.querySelector('.detail-ai-summary');
+  if (existing) existing.remove();
+  const summaryEl = document.createElement('div');
+  summaryEl.className = 'detail-ai-summary';
+  const label = document.createElement('div');
+  label.className = 'detail-ai-summary-label';
+  const labelText = kind === 'pr' ? 'PR Summary' : 'Summary';
+  const cached = at ? ` · ${relativeAge(at)} のキャッシュ` : '';
+  label.textContent = `${labelText} (${cli || 'AI'})${cached}`;
+  summaryEl.appendChild(label);
+  const body = document.createElement('div');
+  body.className = 'detail-ai-summary-body';
+  body.textContent = summary;
+  summaryEl.appendChild(body);
+  host.appendChild(summaryEl);
+}
+
+async function runSummarize(card, btn, text, cacheKey) {
+  const existing = card.querySelector('.detail-ai-summary');
+  if (existing) existing.remove();
+
+  const summaryEl = document.createElement('div');
   summaryEl.className = 'detail-ai-summary loading';
   summaryEl.textContent = 'AI で要約中...';
   card.appendChild(summaryEl);
@@ -1276,31 +1316,25 @@ async function runSummarize(card, btn, text) {
 
   try {
     const { summary, cli } = await api.aiSummarize(text);
-    summaryEl.classList.remove('loading');
-    summaryEl.textContent = '';
-    const label = document.createElement('div');
-    label.className = 'detail-ai-summary-label';
-    label.textContent = `Summary (${cli || 'AI'})`;
-    summaryEl.appendChild(label);
-    const body = document.createElement('div');
-    body.className = 'detail-ai-summary-body';
-    body.textContent = summary;
-    summaryEl.appendChild(body);
+    summaryEl.remove();
+    renderSummaryInto(card, 'thread', { summary, cli, at: null });
+    if (cacheKey) writeAiSummary(cacheKey, summary, cli);
+    btn.textContent = '再要約';
   } catch (err) {
     summaryEl.classList.remove('loading');
     summaryEl.classList.add('error');
     summaryEl.textContent = err.message;
+    btn.textContent = 'AIで要約';
   } finally {
     btn.disabled = false;
-    btn.textContent = 'AIで要約';
   }
 }
 
 async function runPRSummarize(host, btn, detail) {
-  let summaryEl = host.querySelector('.detail-ai-summary');
-  if (summaryEl) summaryEl.remove();
+  const existing = host.querySelector('.detail-ai-summary');
+  if (existing) existing.remove();
 
-  summaryEl = document.createElement('div');
+  const summaryEl = document.createElement('div');
   summaryEl.className = 'detail-ai-summary loading';
   summaryEl.textContent = 'AI で PR を要約中...';
   host.appendChild(summaryEl);
@@ -1319,22 +1353,17 @@ async function runPRSummarize(host, btn, detail) {
       body: detail.body || '',
       files,
     });
-    summaryEl.classList.remove('loading');
-    summaryEl.textContent = '';
-    const label = document.createElement('div');
-    label.className = 'detail-ai-summary-label';
-    label.textContent = `PR Summary (${cli || 'AI'})`;
-    summaryEl.appendChild(label);
-    const body = document.createElement('div');
-    body.className = 'detail-ai-summary-body';
-    body.textContent = summary;
-    summaryEl.appendChild(body);
+    summaryEl.remove();
+    renderSummaryInto(host, 'pr', { summary, cli, at: null });
+    const ctx = paneContext();
+    if (ctx) writeAiSummary(ctx.prKey, summary, cli);
+    btn.textContent = '再要約';
   } catch (err) {
     summaryEl.remove();
     showToast(`PR要約に失敗: ${err.message}`, 'error');
+    btn.textContent = originalLabel;
   } finally {
     btn.disabled = false;
-    btn.textContent = originalLabel;
   }
 }
 
@@ -1363,10 +1392,19 @@ function renderDetailContent(container, detail) {
   const prSummaryHost = document.createElement('div');
   prSummaryHost.className = 'detail-pr-summary-host';
 
+  // Pre-populate from cache so the user sees their previous AI summary
+  // immediately on reopen, without re-spending CLI time. Button label flips
+  // to "再要約" so it's obvious this is regeneration vs first-time.
+  const ctx = paneContext();
+  const cachedPrSummary = ctx ? readAiSummary(ctx.prKey) : null;
+  if (cachedPrSummary) {
+    renderSummaryInto(prSummaryHost, 'pr', cachedPrSummary);
+  }
+
   if (isAiAvailable()) {
     summarizePrBtn = document.createElement('button');
     summarizePrBtn.className = 'detail-pr-summary-btn';
-    summarizePrBtn.textContent = 'PR全体をAIで要約';
+    summarizePrBtn.textContent = cachedPrSummary ? '再要約' : 'PR全体をAIで要約';
     actionRow.appendChild(summarizePrBtn);
   }
 
@@ -1508,16 +1546,19 @@ function renderDetailContent(container, detail) {
       }
       headerRow.appendChild(loc);
 
+      const cacheKey = ctx ? threadCacheKey(ctx, thread) : null;
+      const cachedThreadSummary = cacheKey ? readAiSummary(cacheKey) : null;
+
       if (isAiAvailable()) {
         const aiBtn = document.createElement('button');
         aiBtn.className = 'detail-ai-btn';
-        aiBtn.textContent = 'AIで要約';
+        aiBtn.textContent = cachedThreadSummary ? '再要約' : 'AIで要約';
         aiBtn.addEventListener('click', async (e) => {
           e.stopPropagation();
           const allText = thread.comments
             .map((c) => `${c.author?.login || 'unknown'}: ${c.body}`)
             .join('\n\n');
-          await runSummarize(card, aiBtn, allText);
+          await runSummarize(card, aiBtn, allText, cacheKey);
         });
         headerRow.appendChild(aiBtn);
       }
@@ -1551,6 +1592,10 @@ function renderDetailContent(container, detail) {
 
         card.appendChild(comment);
       });
+
+      if (cachedThreadSummary) {
+        renderSummaryInto(card, 'thread', cachedThreadSummary);
+      }
 
       container.appendChild(card);
     });
