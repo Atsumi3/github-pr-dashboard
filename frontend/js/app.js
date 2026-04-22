@@ -797,12 +797,23 @@ async function loadSingleRepo(repoId) {
     reapplySearchFilter();
   } catch (err) {
     loadingSection.remove();
-    upsertLastDataRepo({
+    // Preserve previously-rendered PRs on failure — wiping to [] would hide
+    // already-fetched content and leave the user staring at "Repository
+    // inaccessible" even though we have perfectly good cached data.
+    const prevPrs = lastData?.repos?.find((r) => r.repo === repoId)?.prs || [];
+    const errored = {
       repo: repoId,
-      prs: [],
-      error: err.message,
+      prs: prevPrs,
+      error: { message: err.message, status: err.status || null },
       paused: lastDataPaused(repoId),
-    });
+    };
+    upsertLastDataRepo(errored);
+    // Re-render the section in place so the error tag shows up but the PR
+    // cards stay visible.
+    const newSection = renderRepoSection(errored);
+    const existing = main.querySelector(`.repo-section[data-repo="${CSS.escape(repoId)}"]`);
+    if (existing) existing.replaceWith(newSection);
+    else main.insertBefore(newSection, main.firstChild);
     if (lastData) writeCache(CACHE_KEYS.prs, lastData);
     showToast(`Failed to load ${repoId}: ${err.message}`, 'error');
   } finally {
