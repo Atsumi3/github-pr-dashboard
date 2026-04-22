@@ -1629,6 +1629,111 @@ const FAILED_CHECK_LABELS = {
   ERROR: 'Error',
 };
 
+// Threshold above which the conflict file list collapses behind a
+// "Show all" button. Below this we just render inline.
+const CONFLICTS_INLINE_THRESHOLD = 5;
+
+function renderConflictFiles(container, detail) {
+  const files = detail.conflictFiles;
+  if (!Array.isArray(files) || files.length === 0) return;
+
+  // Banner-style block. Header is a toggle button so the reviewer can
+  // collapse the file list once they've absorbed the message.
+  const banner = document.createElement('div');
+  banner.className = 'detail-conflict-banner';
+
+  const header = document.createElement('button');
+  header.type = 'button';
+  header.className = 'detail-conflict-banner-header';
+  header.setAttribute('aria-expanded', 'true');
+  const caret = document.createElement('span');
+  caret.className = 'detail-conflict-banner-caret';
+  caret.setAttribute('aria-hidden', 'true');
+  caret.textContent = '▾';
+  const icon = document.createElement('span');
+  icon.className = 'detail-conflict-banner-icon';
+  icon.setAttribute('aria-hidden', 'true');
+  icon.textContent = '⚠';
+  const title = document.createElement('span');
+  title.className = 'detail-conflict-banner-title';
+  title.textContent = `Merge conflict with ${detail.baseBranch || 'base'}`;
+  const count = document.createElement('span');
+  count.className = 'detail-conflict-banner-count';
+  count.textContent = `${files.length} file${files.length === 1 ? '' : 's'}`;
+  header.append(caret, icon, title, count);
+  banner.appendChild(header);
+
+  // Collapsible body wrapper so toggle is one DOM op.
+  const bannerBody = document.createElement('div');
+  bannerBody.className = 'detail-conflict-banner-body';
+
+  header.addEventListener('click', () => {
+    const open = header.getAttribute('aria-expanded') === 'true';
+    header.setAttribute('aria-expanded', open ? 'false' : 'true');
+    caret.textContent = open ? '▸' : '▾';
+    bannerBody.style.display = open ? 'none' : '';
+  });
+
+  const note = document.createElement('div');
+  note.className = 'detail-conflict-note';
+  note.textContent =
+    'PR と base 側の両方が変更したファイル。行レベルの衝突は GitHub の merge UI で確認してください。';
+  bannerBody.appendChild(note);
+
+  const list = document.createElement('div');
+  list.className = 'detail-conflict-list';
+
+  // PR Files tab is the most stable deep-link target — per-file anchors
+  // are content-addressed hashes that we'd have to recompute.
+  const filesPageUrl = detail.url ? `${detail.url}/files` : null;
+
+  const renderRow = (f) => {
+    const row = document.createElement(filesPageUrl ? 'a' : 'div');
+    row.className = 'detail-conflict-row';
+    if (filesPageUrl) {
+      row.href = filesPageUrl;
+      row.target = '_blank';
+      row.rel = 'noopener';
+    }
+    const name = document.createElement('span');
+    name.className = 'detail-conflict-name';
+    name.textContent = f.filename;
+    name.title = f.filename;
+    row.appendChild(name);
+    const stats = document.createElement('span');
+    stats.className = 'detail-conflict-stats';
+    stats.textContent = `PR +${f.prAdditions}/-${f.prDeletions} · base +${f.baseAdditions}/-${f.baseDeletions}`;
+    row.appendChild(stats);
+    return row;
+  };
+
+  if (files.length <= CONFLICTS_INLINE_THRESHOLD) {
+    files.forEach((f) => list.appendChild(renderRow(f)));
+  } else {
+    files.slice(0, CONFLICTS_INLINE_THRESHOLD).forEach((f) => list.appendChild(renderRow(f)));
+
+    const tail = files.slice(CONFLICTS_INLINE_THRESHOLD);
+    const tailWrap = document.createElement('div');
+    tailWrap.className = 'detail-conflict-tail hidden';
+    tail.forEach((f) => tailWrap.appendChild(renderRow(f)));
+    list.appendChild(tailWrap);
+
+    const more = document.createElement('button');
+    more.type = 'button';
+    more.className = 'detail-conflict-more';
+    more.textContent = `他 ${tail.length} 件を表示`;
+    more.addEventListener('click', () => {
+      tailWrap.classList.remove('hidden');
+      more.remove();
+    });
+    list.appendChild(more);
+  }
+
+  bannerBody.appendChild(list);
+  banner.appendChild(bannerBody);
+  container.appendChild(banner);
+}
+
 function renderFailedChecks(container, detail) {
   const failed = Array.isArray(detail.failedChecks) ? detail.failedChecks : [];
   const error = detail.failedChecksError;
@@ -2248,6 +2353,10 @@ function renderDetailContent(container, detail) {
     meta.appendChild(el);
   });
   container.appendChild(meta);
+
+  // Conflict candidates banner. Sits below Changes / Files but its
+  // styling makes "this PR can't merge cleanly" stand out anyway.
+  renderConflictFiles(container, detail);
 
   // Failed CI checks: only render the section when there's something to act
   // on (failed run, fetch error, or — when explicitly red — a "no failing
