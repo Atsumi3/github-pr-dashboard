@@ -46,7 +46,11 @@ export async function fetchAllPRs(token) {
     console.log(
       `Fetch: fetching PRs for ${activeRepos.length}/${allRepos.length} repo(s) (others paused)`,
     );
-    const previous = cache.get() || [];
+    // Use peek() (not get()) so TTL expiry doesn't wipe the per-repo
+    // fallback. Otherwise a tab that was backgrounded longer than
+    // pollInterval would lose the last-known PRs as soon as one repo's
+    // refetch failed (e.g. WinTicket/app's recurring GitHub 502).
+    const previous = cache.peek() || [];
     const previousByRepo = new Map(previous.map((r) => [r.repo, r]));
     const results = await Promise.all(
       activeRepos.map(async (repo) => {

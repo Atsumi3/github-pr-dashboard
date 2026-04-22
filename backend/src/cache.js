@@ -10,6 +10,14 @@ export function get() {
   return null;
 }
 
+// Read the last-stored snapshot ignoring TTL. Used by fetchAllPRs when it
+// needs to preserve per-repo PR lists across a transient failure: TTL is for
+// "is this fresh enough to skip a fetch?", not for "is this still better than
+// nothing if the next fetch fails?".
+export function peek() {
+  return cached;
+}
+
 export function set(data) {
   cached = data;
   cachedAt = Date.now();
