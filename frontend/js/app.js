@@ -1616,47 +1616,502 @@ function renderFailedChecks(container, detail) {
   list.className = 'detail-check-list';
 
   failed.forEach((c) => {
-    // Each entry is rendered as a link when GitHub gave us a destination
-    // URL (Actions log, third-party CI service, etc.); fall back to a plain
-    // div otherwise so the row still appears.
-    const row = document.createElement(c.url ? 'a' : 'div');
-    row.className = 'detail-check';
-    if (c.url) {
-      row.href = c.url;
-      row.target = '_blank';
-      row.rel = 'noopener';
-    }
-
-    const badge = document.createElement('span');
-    badge.className = 'detail-check-badge';
-    badge.textContent = FAILED_CHECK_LABELS[c.conclusion] || c.conclusion || 'Failed';
-    row.appendChild(badge);
-
-    const name = document.createElement('span');
-    name.className = 'detail-check-name';
-    name.textContent = c.name;
-    name.title = c.name;
-    row.appendChild(name);
-
-    if (c.description) {
-      const desc = document.createElement('span');
-      desc.className = 'detail-check-desc';
-      desc.textContent = c.description;
-      desc.title = c.description;
-      row.appendChild(desc);
-    }
-
-    if (c.completedAt) {
-      const time = document.createElement('span');
-      time.className = 'detail-check-time';
-      time.textContent = relativeTime(c.completedAt);
-      row.appendChild(time);
-    }
-
-    list.appendChild(row);
+    list.appendChild(renderFailedCheckEntry(c));
   });
 
   container.appendChild(list);
+}
+
+// One failed check row + on-demand expand. Annotations are the primary
+// "what went wrong" payload; if GitHub didn't emit any, fall back to the
+// CheckRun summary; otherwise to StatusContext.description; otherwise a
+// "no detail available" notice with a link to the run.
+function renderFailedCheckEntry(c) {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'detail-check-entry';
+
+  const hasDetail =
+    (c.annotations && c.annotations.length > 0) ||
+    (c.summary && c.summary.trim()) ||
+    (c.description && c.description.trim());
+
+  // Header row: clickable to expand when there's detail to show, plain
+  // link to the Actions/CI page when there isn't.
+  const head = document.createElement(hasDetail ? 'button' : c.url ? 'a' : 'div');
+  head.className = 'detail-check';
+  if (hasDetail) {
+    head.type = 'button';
+    head.setAttribute('aria-expanded', 'false');
+  } else if (c.url) {
+    head.href = c.url;
+    head.target = '_blank';
+    head.rel = 'noopener';
+  }
+
+  if (hasDetail) {
+    const caret = document.createElement('span');
+    caret.className = 'detail-check-caret';
+    caret.textContent = '▸';
+    head.appendChild(caret);
+  }
+
+  const badge = document.createElement('span');
+  badge.className = 'detail-check-badge';
+  badge.textContent = FAILED_CHECK_LABELS[c.conclusion] || c.conclusion || 'Failed';
+  head.appendChild(badge);
+
+  const name = document.createElement('span');
+  name.className = 'detail-check-name';
+  name.textContent = c.name;
+  name.title = c.name;
+  head.appendChild(name);
+
+  // For StatusContext (no annotations), the inline description doubles as
+  // the only signal — keep it visible on the row even when collapsed.
+  if (c.description && !c.annotations) {
+    const desc = document.createElement('span');
+    desc.className = 'detail-check-desc';
+    desc.textContent = c.description;
+    desc.title = c.description;
+    head.appendChild(desc);
+  }
+
+  if (c.completedAt) {
+    const time = document.createElement('span');
+    time.className = 'detail-check-time';
+    time.textContent = relativeTime(c.completedAt);
+    head.appendChild(time);
+  }
+
+  wrapper.appendChild(head);
+
+  if (!hasDetail) return wrapper;
+
+  let body = null;
+  head.addEventListener('click', () => {
+    const open = head.getAttribute('aria-expanded') === 'true';
+    if (open) {
+      head.setAttribute('aria-expanded', 'false');
+      head.querySelector('.detail-check-caret').textContent = '▸';
+      if (body) body.style.display = 'none';
+      return;
+    }
+    head.setAttribute('aria-expanded', 'true');
+    head.querySelector('.detail-check-caret').textContent = '▾';
+    if (!body) {
+      body = renderCheckBody(c);
+      wrapper.appendChild(body);
+    } else {
+      body.style.display = '';
+    }
+  });
+
+  return wrapper;
+}
+
+function renderCheckBody(c) {
+  const body = document.createElement('div');
+  body.className = 'detail-check-body';
+
+  if (c.annotations && c.annotations.length > 0) {
+    const list = document.createElement('div');
+    list.className = 'detail-check-annotations';
+    for (const a of c.annotations) {
+      const row = document.createElement('div');
+      row.className = `detail-check-annotation ${a.level === 'WARNING' ? 'warn' : 'fail'}`;
+      const loc = document.createElement('span');
+      loc.className = 'detail-check-annotation-loc';
+      loc.textContent = a.path ? (a.startLine ? `${a.path}:${a.startLine}` : a.path) : '(no path)';
+      row.appendChild(loc);
+      if (a.title) {
+        const t = document.createElement('div');
+        t.className = 'detail-check-annotation-title';
+        t.textContent = a.title;
+        row.appendChild(t);
+      }
+      const msg = document.createElement('div');
+      msg.className = 'detail-check-annotation-msg';
+      msg.textContent = a.message || '';
+      row.appendChild(msg);
+      list.appendChild(row);
+    }
+    body.appendChild(list);
+  } else if (c.summary && c.summary.trim()) {
+    const sum = document.createElement('pre');
+    sum.className = 'detail-check-summary';
+    sum.textContent = c.summary;
+    body.appendChild(sum);
+  } else if (c.description && c.description.trim()) {
+    const sum = document.createElement('pre');
+    sum.className = 'detail-check-summary';
+    sum.textContent = c.description;
+    body.appendChild(sum);
+  }
+
+  // Open-in-GitHub for the underlying run/log
+  if (c.url) {
+    const link = document.createElement('a');
+    link.className = 'detail-check-body-link';
+    link.href = c.url;
+    link.target = '_blank';
+    link.rel = 'noopener';
+    link.textContent = 'GitHub で開く';
+    body.appendChild(link);
+  }
+
+  // AI analysis button — only when AI server is up AND we have something to
+  // feed it (annotations or summary). Text is composed locally so the prompt
+  // is well-scoped: "this is a failed CI check, here's what GitHub reported".
+  const analysisInput = composeCheckAnalysisInput(c);
+  if (isAiAvailable() && analysisInput) {
+    const aiBtn = document.createElement('button');
+    aiBtn.className = 'detail-check-ai-btn';
+    aiBtn.type = 'button';
+    aiBtn.textContent = 'AI で原因分析';
+
+    const ctx = paneContext();
+    const cacheKey = ctx
+      ? `check:${ctx.owner}/${ctx.repo}#${ctx.number}:${shortHash(c.name + analysisInput)}`
+      : null;
+    const label = ctx ? `${ctx.owner}/${ctx.repo}#${ctx.number} ${c.name}` : c.name;
+
+    // Reflect the global in-flight state on the button so the user knows
+    // the click went through even if they later close + reopen the pane.
+    if (cacheKey && aiTasksInProgress.has(cacheKey)) {
+      aiBtn.textContent = '分析中…';
+      aiBtn.disabled = true;
+    }
+
+    aiBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (!cacheKey) return;
+      aiBtn.textContent = '分析中…';
+      aiBtn.disabled = true;
+      startAiAnalysis({
+        key: cacheKey,
+        label,
+        input: analysisInput,
+        onComplete: ({ summary, cli }) => {
+          // Only paint into this pane if it's still in the DOM; the
+          // localStorage cache is the source of truth on reopen.
+          if (document.contains(body)) {
+            renderSummaryInto(body, 'thread', { summary, cli, at: null });
+            aiBtn.textContent = '再要約';
+            aiBtn.disabled = false;
+          }
+        },
+        onError: () => {
+          if (document.contains(aiBtn)) {
+            aiBtn.textContent = 'AI で原因分析';
+            aiBtn.disabled = false;
+          }
+        },
+      });
+    });
+    body.appendChild(aiBtn);
+
+    // Pre-populate cached AI summary if available so the user sees prior
+    // analysis on reopen without re-spending CLI time.
+    const cached = cacheKey ? readAiSummary(cacheKey) : null;
+    if (cached) {
+      renderSummaryInto(body, 'thread', cached);
+      aiBtn.textContent = '再要約';
+    }
+  }
+
+  return body;
+}
+
+function composeCheckAnalysisInput(c) {
+  const parts = [];
+  parts.push(`Failed CI check: ${c.name}`);
+  parts.push(`Conclusion: ${c.conclusion}`);
+  if (c.annotations && c.annotations.length > 0) {
+    parts.push('\nAnnotations:');
+    for (const a of c.annotations) {
+      const loc = a.path ? (a.startLine ? `${a.path}:${a.startLine}` : a.path) : '(no path)';
+      parts.push(`- [${a.level || 'FAILURE'}] ${loc}`);
+      if (a.title) parts.push(`  title: ${a.title}`);
+      if (a.message) parts.push(`  message: ${a.message}`);
+    }
+  } else if (c.summary && c.summary.trim()) {
+    parts.push('\nSummary:');
+    parts.push(c.summary.trim());
+  } else if (c.description && c.description.trim()) {
+    parts.push('\nDescription:');
+    parts.push(c.description.trim());
+  } else {
+    return null;
+  }
+  return parts.join('\n');
+}
+
+// Background AI analysis tasks live here so they survive the detail pane
+// being closed. Key is the localStorage cache key, so a repeated click on
+// the same check coalesces into one in-flight request.
+const aiTasksInProgress = new Map(); // key -> { label, startedAt }
+
+function updateAiTaskIndicator() {
+  const el = document.getElementById('ai-tasks-indicator');
+  if (!el) return;
+  const count = aiTasksInProgress.size;
+  if (count === 0) {
+    el.classList.add('hidden');
+    return;
+  }
+  el.classList.remove('hidden');
+  el.title = [...aiTasksInProgress.values()].map((t) => t.label).join(' / ');
+  const countEl = el.querySelector('.ai-tasks-count');
+  if (countEl) countEl.textContent = String(count);
+}
+
+// Fire-and-forget AI analysis. The pane can close, the user can navigate
+// away, and the request still resolves: result lands in localStorage cache,
+// header indicator decrements, a native notification + toast announce
+// completion. Repeated clicks while one is in-flight are deduped.
+function startAiAnalysis({ key, label, input, onComplete, onError }) {
+  if (!key || !input) return;
+  if (aiTasksInProgress.has(key)) {
+    showToast(`既に分析中: ${label}`, 'success');
+    return;
+  }
+  aiTasksInProgress.set(key, { label, startedAt: Date.now() });
+  updateAiTaskIndicator();
+
+  api
+    .aiSummarize(input)
+    .then(({ summary, cli }) => {
+      writeAiSummary(key, summary, cli);
+      sendNotification('AI 分析完了', label);
+      showToast(`AI 分析完了: ${label}`, 'success');
+      if (typeof onComplete === 'function') onComplete({ summary, cli });
+    })
+    .catch((err) => {
+      showToast(`AI 分析失敗 (${label}): ${err.message}`, 'error');
+      if (typeof onError === 'function') onError(err);
+    })
+    .finally(() => {
+      aiTasksInProgress.delete(key);
+      updateAiTaskIndicator();
+    });
+}
+
+// Hard cap on rendered diff lines per file. A handful of files in real PRs
+// contain thousands of lines (lockfiles, generated bundles); rendering them
+// all freezes the pane and bloats the DOM. Anything above this is truncated
+// with a note + a link to the full diff on GitHub.
+const MAX_DIFF_LINES = 500;
+
+// Parse a unified diff hunk header `@@ -<oldStart>,<oldLen> +<newStart>,<newLen> @@`
+// and return the starting old/new line numbers. Length fields are optional in
+// single-line hunks (`@@ -3 +3 @@`).
+const HUNK_RE = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
+
+// Map filename → highlight.js language id. Bundled cdn-assets common build
+// covers all of these. Extensions not listed here render with no highlight
+// (still readable thanks to the +/- gutter coloring).
+const HLJS_BY_EXT = {
+  js: 'javascript',
+  mjs: 'javascript',
+  cjs: 'javascript',
+  jsx: 'javascript',
+  ts: 'typescript',
+  tsx: 'typescript',
+  py: 'python',
+  rb: 'ruby',
+  go: 'go',
+  rs: 'rust',
+  java: 'java',
+  kt: 'kotlin',
+  swift: 'swift',
+  c: 'c',
+  h: 'c',
+  cpp: 'cpp',
+  cc: 'cpp',
+  hpp: 'cpp',
+  cs: 'csharp',
+  php: 'php',
+  json: 'json',
+  yaml: 'yaml',
+  yml: 'yaml',
+  toml: 'ini',
+  xml: 'xml',
+  html: 'xml',
+  htm: 'xml',
+  css: 'css',
+  scss: 'scss',
+  less: 'less',
+  md: 'markdown',
+  markdown: 'markdown',
+  sh: 'bash',
+  bash: 'bash',
+  zsh: 'bash',
+  sql: 'sql',
+  dart: 'dart',
+  dockerfile: 'dockerfile',
+  vue: 'xml',
+  svelte: 'xml',
+};
+const HLJS_BY_BASENAME = {
+  Dockerfile: 'dockerfile',
+  Makefile: 'makefile',
+  '.gitignore': 'plaintext',
+};
+
+function detectHljsLang(filename) {
+  if (!filename) return null;
+  const base = filename.split('/').pop();
+  if (HLJS_BY_BASENAME[base]) return HLJS_BY_BASENAME[base];
+  const dotIdx = base.lastIndexOf('.');
+  if (dotIdx === -1) return null;
+  return HLJS_BY_EXT[base.slice(dotIdx + 1).toLowerCase()] || null;
+}
+
+function highlightLine(body, lang) {
+  // Skip when hljs isn't loaded (CSP blocked it / lib missing) or the
+  // language isn't bundled. Fall back to plain text — caller renders via
+  // textContent in that case.
+  const hljs = window.hljs;
+  if (!hljs || !lang || !hljs.getLanguage(lang)) return null;
+  try {
+    return hljs.highlight(body, { language: lang, ignoreIllegals: true }).value;
+  } catch {
+    return null;
+  }
+}
+
+// Lazy-load language modules from jsdelivr that aren't part of the bundled
+// common build (Dart, Dockerfile, Elixir, Zig, Terraform, ...). Pinned to
+// the same version we ship locally so the upstream API can't drift.
+const HLJS_VERSION = '11.11.1';
+const langLoadPromises = new Map();
+function isLangLoaded(lang) {
+  return !!window.hljs?.getLanguage(lang);
+}
+function loadLang(lang) {
+  if (!lang) return Promise.resolve(false);
+  if (isLangLoaded(lang)) return Promise.resolve(true);
+  if (langLoadPromises.has(lang)) return langLoadPromises.get(lang);
+  const url = `https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@${HLJS_VERSION}/languages/${lang}.min.js`;
+  const p = new Promise((resolve) => {
+    const script = document.createElement('script');
+    script.src = url;
+    script.async = true;
+    script.onload = () => resolve(isLangLoaded(lang));
+    script.onerror = () => resolve(false);
+    document.head.appendChild(script);
+  });
+  langLoadPromises.set(lang, p);
+  return p;
+}
+
+function renderFileDiff(file) {
+  const wrap = document.createElement('div');
+  wrap.className = 'detail-file-diff';
+
+  if (file.patch == null) {
+    // GitHub omits patch for binary files (images, fonts) and very large
+    // entries. Surface the reason rather than an empty box.
+    const note = document.createElement('div');
+    note.className = 'detail-file-diff-note';
+    note.textContent = 'バイナリファイル、または GitHub が diff を返さなかったファイルです';
+    wrap.appendChild(note);
+    return wrap;
+  }
+
+  const lines = file.patch.split('\n');
+  const truncated = lines.length > MAX_DIFF_LINES;
+  const visible = truncated ? lines.slice(0, MAX_DIFF_LINES) : lines;
+  const lang = detectHljsLang(file.filename);
+
+  // Two columns of line numbers + the source line, laid out in a single CSS
+  // grid (one row per diff line). Children are appended directly to the
+  // grid container — wrapping each row in a div with `display: contents`
+  // is still buggy for grid in Safari 16.
+  const grid = document.createElement('div');
+  grid.className = 'detail-file-diff-grid';
+
+  let oldLine = 0;
+  let newLine = 0;
+
+  for (const raw of visible) {
+    if (raw.startsWith('@@')) {
+      const m = raw.match(HUNK_RE);
+      if (m) {
+        oldLine = parseInt(m[1], 10);
+        newLine = parseInt(m[2], 10);
+      }
+      const hunk = document.createElement('div');
+      hunk.className = 'diff-hunk';
+      hunk.textContent = raw;
+      grid.appendChild(hunk);
+      continue;
+    }
+
+    let cls = 'diff-context';
+    let oldNum = '';
+    let newNum = '';
+
+    let prefix = '';
+    let body = raw;
+    if (raw.startsWith('+') && !raw.startsWith('+++')) {
+      cls = 'diff-add';
+      prefix = '+';
+      body = raw.slice(1);
+      newNum = String(newLine);
+      newLine += 1;
+    } else if (raw.startsWith('-') && !raw.startsWith('---')) {
+      cls = 'diff-del';
+      prefix = '-';
+      body = raw.slice(1);
+      oldNum = String(oldLine);
+      oldLine += 1;
+    } else if (raw.startsWith('---') || raw.startsWith('+++')) {
+      // GitHub usually strips the `--- a/...` / `+++ b/...` headers, but
+      // be defensive in case a future API revision starts including them.
+      cls = 'diff-meta';
+    } else {
+      // Unified diff context lines start with a single space — drop it so
+      // body holds the actual source line as it appears in the file.
+      body = raw.startsWith(' ') ? raw.slice(1) : raw;
+      oldNum = String(oldLine);
+      newNum = String(newLine);
+      oldLine += 1;
+      newLine += 1;
+    }
+
+    const oldEl = document.createElement('span');
+    oldEl.className = `diff-num ${cls}`;
+    oldEl.textContent = oldNum;
+
+    const newEl = document.createElement('span');
+    newEl.className = `diff-num ${cls}`;
+    newEl.textContent = newNum;
+
+    const codeEl = document.createElement('span');
+    codeEl.className = `diff-code ${cls}`;
+    // Render the +/- prefix via a CSS ::before with the data-prefix attr so
+    // it's excluded from text selection and copy.
+    codeEl.dataset.prefix = prefix;
+    const safeBody = body === '' ? ' ' : body;
+    const highlighted = cls === 'diff-meta' ? null : highlightLine(safeBody, lang);
+    if (highlighted) {
+      codeEl.innerHTML = highlighted;
+    } else {
+      codeEl.textContent = safeBody;
+    }
+
+    grid.append(oldEl, newEl, codeEl);
+  }
+  wrap.appendChild(grid);
+
+  if (truncated) {
+    const note = document.createElement('div');
+    note.className = 'detail-file-diff-note';
+    note.textContent = `${MAX_DIFF_LINES} 行で打ち切り (全 ${lines.length} 行)。続きは GitHub で確認してください。`;
+    wrap.appendChild(note);
+  }
+  return wrap;
 }
 
 function renderDetailContent(container, detail) {
@@ -1762,7 +2217,7 @@ function renderDetailContent(container, detail) {
   // the pane isn't dominated by green ticks.
   renderFailedChecks(container, detail);
 
-  // Files
+  // Files (clickable to expand the unified diff inline)
   if (detail.files.length > 0) {
     const filesTitle = document.createElement('div');
     filesTitle.className = 'detail-section-title';
@@ -1773,8 +2228,18 @@ function renderDetailContent(container, detail) {
     fileList.className = 'detail-file-list';
 
     detail.files.forEach((f) => {
-      const row = document.createElement('div');
+      const wrapper = document.createElement('div');
+      wrapper.className = 'detail-file-entry';
+
+      const row = document.createElement('button');
+      row.type = 'button';
       row.className = 'detail-file';
+      row.setAttribute('aria-expanded', 'false');
+
+      const caret = document.createElement('span');
+      caret.className = 'detail-file-caret';
+      caret.textContent = '▸';
+      row.appendChild(caret);
 
       const badge = document.createElement('span');
       badge.className = `detail-file-badge ${f.status}`;
@@ -1800,7 +2265,40 @@ function renderDetailContent(container, detail) {
         row.appendChild(del);
       }
 
-      fileList.appendChild(row);
+      wrapper.appendChild(row);
+
+      // Diff body — created lazily on first expand to avoid building DOM
+      // for files the user never opens (a 100-file PR would otherwise
+      // build 100 patch DOM trees up front).
+      let diffEl = null;
+      const toggle = async () => {
+        const isOpen = row.getAttribute('aria-expanded') === 'true';
+        if (isOpen) {
+          row.setAttribute('aria-expanded', 'false');
+          caret.textContent = '▸';
+          if (diffEl) diffEl.style.display = 'none';
+          return;
+        }
+        row.setAttribute('aria-expanded', 'true');
+        caret.textContent = '▾';
+        if (!diffEl) {
+          // Resolve the highlight.js language for this filename and lazy
+          // load it from jsdelivr if it's not already in the bundled set.
+          // Render proceeds even if the load fails — diff just falls back
+          // to plain text.
+          const lang = detectHljsLang(f.filename);
+          if (lang && !isLangLoaded(lang)) {
+            await loadLang(lang);
+          }
+          diffEl = renderFileDiff(f);
+          wrapper.appendChild(diffEl);
+        } else {
+          diffEl.style.display = '';
+        }
+      };
+      row.addEventListener('click', toggle);
+
+      fileList.appendChild(wrapper);
     });
     container.appendChild(fileList);
   }

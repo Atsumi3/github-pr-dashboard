@@ -12,6 +12,14 @@
       rel="stylesheet"
     />
     <link rel="stylesheet" href="/css/style.css" />
+    <!-- highlight.js (BSD-3-Clause). Theme + bundle for diff syntax highlighting.
+         License: frontend/js/lib/LICENSE-highlight.js -->
+    <link rel="stylesheet" href="/css/lib/atom-one-dark.min.css" />
+    <script src="/js/lib/highlight.min.js"></script>
+    <!-- Languages outside the common bundle (Dart, Dockerfile, Elixir, Zig,
+         Terraform, ...) are lazy-loaded from jsdelivr on demand by app.js
+         (loadLang). The bundled `highlight.min.js` already provides ~36
+         common languages. -->
   </head>
   <body>
     <div class="dashboard">
@@ -35,6 +43,11 @@
         </div>
         <div class="header-right">
           <div id="header-stats" class="header-stats"></div>
+          <div id="ai-tasks-indicator" class="ai-tasks-indicator hidden" aria-live="polite">
+            <span class="ai-tasks-spinner" aria-hidden="true"></span>
+            <span class="ai-tasks-text">AI 分析中</span>
+            <span class="ai-tasks-count">0</span>
+          </div>
           <div class="header-search">
             <input id="pr-search" type="text" placeholder="Search PRs..." autocomplete="off" />
           </div>
