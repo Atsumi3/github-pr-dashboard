@@ -131,7 +131,10 @@ async function gqlWithRetry(token, query, variables, repoFullName, attempts = 3)
         method: 'POST',
         headers: { ...headers(token), 'Content-Type': 'application/json' },
         body: JSON.stringify({ query, variables }),
-        signal: AbortSignal.timeout(30000),
+        // 15s per-attempt cap. With attempts=3 + 1s/2s backoff this puts the
+        // worst-case at ~48s, leaving headroom under nginx's 60s
+        // proxy_read_timeout (frontend/nginx.conf).
+        signal: AbortSignal.timeout(15000),
       });
       if (res.status >= 500 && i < attempts - 1) {
         lastErr = Object.assign(new Error('GitHub API error'), {
