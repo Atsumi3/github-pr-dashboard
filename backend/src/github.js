@@ -577,6 +577,20 @@ const PR_CHECKS_QUERY = `
                       detailsUrl
                       startedAt
                       completedAt
+                      title
+                      summary
+                      annotations(first: 20) {
+                        nodes {
+                          path
+                          annotationLevel
+                          title
+                          message
+                          location {
+                            start { line }
+                            end { line }
+                          }
+                        }
+                      }
                       checkSuite {
                         workflowRun {
                           workflow { name }
@@ -632,6 +646,19 @@ async function fetchPRChecks(token, owner, repo, number) {
       .map((ctx) => {
         if (ctx.__typename === 'CheckRun') {
           if (!FAILED_CHECK_RUN_CONCLUSIONS.has(ctx.conclusion)) return null;
+          // Annotations point to the actual failing line(s) and are the
+          // primary "what went wrong" signal. summary/title fall back to the
+          // human-written output when annotations weren't emitted.
+          const annotations = (ctx.annotations?.nodes || [])
+            .filter((a) => a)
+            .map((a) => ({
+              path: a.path || null,
+              level: a.annotationLevel || null,
+              title: a.title || null,
+              message: a.message || null,
+              startLine: a.location?.start?.line ?? null,
+              endLine: a.location?.end?.line ?? null,
+            }));
           return {
             kind: 'check',
             name: ctx.checkSuite?.workflowRun?.workflow?.name
@@ -640,6 +667,9 @@ async function fetchPRChecks(token, owner, repo, number) {
             conclusion: ctx.conclusion,
             url: ctx.detailsUrl || null,
             completedAt: ctx.completedAt || null,
+            title: ctx.title || null,
+            summary: ctx.summary || null,
+            annotations,
           };
         }
         if (ctx.__typename === 'StatusContext') {
@@ -660,6 +690,45 @@ async function fetchPRChecks(token, owner, repo, number) {
   } catch (err) {
     console.warn(`fetchPRChecks failed for ${owner}/${repo}#${number}:`, err.message);
     return { rollupState: null, failed: [], error: err.message || 'fetch failed' };
+  }
+}
+
+// When the PR is dirty, list the files that the base branch has touched
+// since the merge base AND the PR has also touched. That's the maximal
+// candidate set for actual merge conflicts — the real per-line conflict
+// only surfaces during a 3-way merge, which we don't run server-side.
+async function fetchPRConflictFiles(token, repoFullName, mergeBaseSha, baseRef, prFiles) {
+  if (!mergeBaseSha) return null;
+  try {
+    const res = await fetch(
+      `${API_BASE}/repos/${repoFullName}/compare/${encodeURIComponent(mergeBaseSha)}...${encodeURIComponent(baseRef)}?per_page=300`,
+      { headers: headers(token) },
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    const baseChanged = new Map(
+      (data.files || []).map((f) => [
+        f.filename,
+        { additions: f.additions ?? 0, deletions: f.deletions ?? 0 },
+      ]),
+    );
+    const prByName = new Map(prFiles.map((f) => [f.filename, f]));
+    const conflicts = [];
+    for (const [filename, base] of baseChanged) {
+      const prFile = prByName.get(filename);
+      if (!prFile) continue;
+      conflicts.push({
+        filename,
+        prAdditions: prFile.additions ?? 0,
+        prDeletions: prFile.deletions ?? 0,
+        baseAdditions: base.additions,
+        baseDeletions: base.deletions,
+      });
+    }
+    return conflicts;
+  } catch (err) {
+    console.warn(`fetchPRConflictFiles failed for ${repoFullName}:`, err.message);
+    return null;
   }
 }
 
@@ -688,6 +757,20 @@ export async function fetchPRDetail(token, owner, repo, number) {
     .then((r) => (r.ok ? r.json() : null))
     .catch(() => null);
 
+  // Conflict file list — only fetch when GitHub already told us mergeable
+  // is false. mergeable === null means GitHub hasn't computed it yet; we
+  // skip and let the next poll retry.
+  const conflictFiles =
+    pr.mergeable === false
+      ? await fetchPRConflictFiles(
+          token,
+          repoFullName,
+          compare?.merge_base_commit?.sha,
+          pr.base.ref,
+          files,
+        )
+      : null;
+
   return {
     number: pr.number,
     title: pr.title,
@@ -709,11 +792,16 @@ export async function fetchPRDetail(token, owner, repo, number) {
       status: f.status,
       additions: f.additions,
       deletions: f.deletions,
+      // GitHub omits `patch` for binary files and for large/renamed entries.
+      // Frontend renders the unified diff inline when present, falls back to
+      // a "binary or oversized" notice otherwise.
+      patch: f.patch ?? null,
     })),
     unresolvedThreads: threadsResult.items,
     unresolvedThreadsError: threadsResult.error,
     checksRollupState: checksResult.rollupState,
     failedChecks: checksResult.failed,
     failedChecksError: checksResult.error,
+    conflictFiles,
   };
 }

@@ -10,3 +10,5 @@ docs/design-historical.md
 .github/ISSUE_TEMPLATE
 .github/PULL_REQUEST_TEMPLATE.md
 LICENSE
+frontend/js/lib
+frontend/css/lib

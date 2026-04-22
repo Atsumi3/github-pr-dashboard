@@ -410,11 +410,11 @@ function renderPRCard(pr) {
   const num = document.createElement('span');
   num.className = 'pr-number';
   num.textContent = `#${pr.number}`;
-  const title = document.createElement('a');
+  // Title is intentionally not a hyperlink — clicking it should open the
+  // in-app detail pane (which has its own "Open in GitHub" button), not
+  // bounce the user out to github.com.
+  const title = document.createElement('span');
   title.className = 'pr-title';
-  title.href = pr.url;
-  title.target = '_blank';
-  title.rel = 'noopener';
   title.textContent = pr.title;
   // Stash the original so highlightTitle can restore / re-mark without
   // accumulating <mark> wrappers across successive search keystrokes.
@@ -1459,6 +1459,12 @@ function threadCacheKey(ctx, thread) {
   return `thread:${ctx.owner}/${ctx.repo}#${ctx.number}:${thread.path}:${thread.line ?? 0}@${sig}`;
 }
 
+function checkCacheKey(ctx, check, input) {
+  if (!ctx) return null;
+  const sig = shortHash(`${check.name}|${input}`);
+  return `check:${ctx.owner}/${ctx.repo}#${ctx.number}:${check.name}@${sig}`;
+}
+
 function relativeAge(at) {
   const sec = Math.max(0, Math.floor((Date.now() - at) / 1000));
   if (sec < 60) return 'たった今';
@@ -1476,7 +1482,8 @@ function renderSummaryInto(host, kind, { summary, cli, at }) {
   const label = document.createElement('div');
   label.className = 'detail-ai-summary-label';
   const main = document.createElement('span');
-  main.textContent = `${kind === 'pr' ? 'PR Summary' : 'Summary'} (${cli || 'AI'})`;
+  const kindLabel = kind === 'pr' ? 'PR Summary' : kind === 'check' ? 'Check Analysis' : 'Summary';
+  main.textContent = `${kindLabel} (${cli || 'AI'})`;
   label.appendChild(main);
   if (at) {
     const cacheTag = document.createElement('span');
@@ -1504,10 +1511,17 @@ function renderSummaryInto(host, kind, { summary, cli, at }) {
   host.appendChild(summaryEl);
 }
 
-async function runSummarize(card, btn, text, cacheKey) {
+// Thread comments → AI summary. Background-task: caller can close the
+// pane and the request still completes (header indicator + native
+// notification announce it). On reopen, the cached summary surfaces and
+// the button reads "再要約".
+function runSummarize(card, btn, text, cacheKey) {
+  if (!cacheKey) return;
+  const ctx = paneContext();
+  const label = ctx ? `${ctx.owner}/${ctx.repo}#${ctx.number} thread summary` : 'thread summary';
+
   const existing = card.querySelector('.detail-ai-summary');
   if (existing) existing.remove();
-
   const summaryEl = document.createElement('div');
   summaryEl.className = 'detail-ai-summary loading';
   summaryEl.textContent = 'AI で要約中...';
@@ -1515,58 +1529,80 @@ async function runSummarize(card, btn, text, cacheKey) {
   btn.disabled = true;
   btn.textContent = '要約中...';
 
-  try {
-    const { summary, cli } = await api.aiSummarize(text);
-    summaryEl.remove();
-    renderSummaryInto(card, 'thread', { summary, cli, at: null });
-    if (cacheKey) writeAiSummary(cacheKey, summary, cli);
-    btn.textContent = '再要約';
-  } catch (err) {
-    summaryEl.classList.remove('loading');
-    summaryEl.classList.add('error');
-    summaryEl.textContent = err.message;
-    btn.textContent = 'AIで要約';
-  } finally {
-    btn.disabled = false;
-  }
+  startAiAnalysis({
+    key: cacheKey,
+    label,
+    run: () => api.aiSummarize(text),
+    onComplete: ({ summary, cli }) => {
+      if (document.contains(card)) {
+        summaryEl.remove();
+        renderSummaryInto(card, 'thread', { summary, cli, at: null });
+        btn.textContent = '再要約';
+        btn.disabled = false;
+      }
+    },
+    onError: (err) => {
+      if (document.contains(summaryEl)) {
+        summaryEl.classList.remove('loading');
+        summaryEl.classList.add('error');
+        summaryEl.textContent = err.message;
+        btn.textContent = 'AIで要約';
+        btn.disabled = false;
+      }
+    },
+  });
 }
 
-async function runPRSummarize(host, btn, detail) {
+// PR-as-a-whole → AI summary. Same background-task pattern as
+// runSummarize, but hits the PR-specific endpoint that adds file list
+// context to the prompt.
+function runPRSummarize(host, btn, detail) {
+  const ctx = paneContext();
+  const cacheKey = prCacheKey(ctx, detail);
+  if (!cacheKey) return;
+  const label = `${ctx.owner}/${ctx.repo}#${ctx.number} PR summary`;
+  const originalLabel = btn.textContent;
+
   const existing = host.querySelector('.detail-ai-summary');
   if (existing) existing.remove();
-
   const summaryEl = document.createElement('div');
   summaryEl.className = 'detail-ai-summary loading';
   summaryEl.textContent = 'AI で PR を要約中...';
   host.appendChild(summaryEl);
   btn.disabled = true;
-  const originalLabel = btn.textContent;
   btn.textContent = '要約中...';
 
-  try {
-    const files = (detail.files || []).map((f) => ({
-      filename: f.filename,
-      additions: f.additions || 0,
-      deletions: f.deletions || 0,
-    }));
-    const { summary, cli } = await api.aiSummarizePR({
-      title: detail.title || '',
-      body: detail.body || '',
-      files,
-    });
-    summaryEl.remove();
-    renderSummaryInto(host, 'pr', { summary, cli, at: null });
-    const ctx = paneContext();
-    const key = prCacheKey(ctx, detail);
-    if (key) writeAiSummary(key, summary, cli);
-    btn.textContent = '再要約';
-  } catch (err) {
-    summaryEl.remove();
-    showToast(`PR要約に失敗: ${err.message}`, 'error');
-    btn.textContent = originalLabel;
-  } finally {
-    btn.disabled = false;
-  }
+  const files = (detail.files || []).map((f) => ({
+    filename: f.filename,
+    additions: f.additions || 0,
+    deletions: f.deletions || 0,
+  }));
+
+  startAiAnalysis({
+    key: cacheKey,
+    label,
+    run: () =>
+      api.aiSummarizePR({
+        title: detail.title || '',
+        body: detail.body || '',
+        files,
+      }),
+    onComplete: ({ summary, cli }) => {
+      if (document.contains(host)) {
+        summaryEl.remove();
+        renderSummaryInto(host, 'pr', { summary, cli, at: null });
+        btn.textContent = '再要約';
+        btn.disabled = false;
+      }
+    },
+    onError: () => {
+      if (document.contains(summaryEl)) {
+        summaryEl.remove();
+        btn.textContent = originalLabel;
+        btn.disabled = false;
+      }
+    },
+  });
 }
 
 function closeDetailPane() {
@@ -1593,6 +1629,111 @@ const FAILED_CHECK_LABELS = {
   ERROR: 'Error',
 };
 
+// Threshold above which the conflict file list collapses behind a
+// "Show all" button. Below this we just render inline.
+const CONFLICTS_INLINE_THRESHOLD = 5;
+
+function renderConflictFiles(container, detail) {
+  const files = detail.conflictFiles;
+  if (!Array.isArray(files) || files.length === 0) return;
+
+  // Banner-style block. Header is a toggle button so the reviewer can
+  // collapse the file list once they've absorbed the message.
+  const banner = document.createElement('div');
+  banner.className = 'detail-conflict-banner';
+
+  const header = document.createElement('button');
+  header.type = 'button';
+  header.className = 'detail-conflict-banner-header';
+  header.setAttribute('aria-expanded', 'true');
+  const caret = document.createElement('span');
+  caret.className = 'detail-conflict-banner-caret';
+  caret.setAttribute('aria-hidden', 'true');
+  caret.textContent = '▾';
+  const icon = document.createElement('span');
+  icon.className = 'detail-conflict-banner-icon';
+  icon.setAttribute('aria-hidden', 'true');
+  icon.textContent = '⚠';
+  const title = document.createElement('span');
+  title.className = 'detail-conflict-banner-title';
+  title.textContent = `Merge conflict with ${detail.baseBranch || 'base'}`;
+  const count = document.createElement('span');
+  count.className = 'detail-conflict-banner-count';
+  count.textContent = `${files.length} file${files.length === 1 ? '' : 's'}`;
+  header.append(caret, icon, title, count);
+  banner.appendChild(header);
+
+  // Collapsible body wrapper so toggle is one DOM op.
+  const bannerBody = document.createElement('div');
+  bannerBody.className = 'detail-conflict-banner-body';
+
+  header.addEventListener('click', () => {
+    const open = header.getAttribute('aria-expanded') === 'true';
+    header.setAttribute('aria-expanded', open ? 'false' : 'true');
+    caret.textContent = open ? '▸' : '▾';
+    bannerBody.style.display = open ? 'none' : '';
+  });
+
+  const note = document.createElement('div');
+  note.className = 'detail-conflict-note';
+  note.textContent =
+    'PR と base 側の両方が変更したファイル。行レベルの衝突は GitHub の merge UI で確認してください。';
+  bannerBody.appendChild(note);
+
+  const list = document.createElement('div');
+  list.className = 'detail-conflict-list';
+
+  // PR Files tab is the most stable deep-link target — per-file anchors
+  // are content-addressed hashes that we'd have to recompute.
+  const filesPageUrl = detail.url ? `${detail.url}/files` : null;
+
+  const renderRow = (f) => {
+    const row = document.createElement(filesPageUrl ? 'a' : 'div');
+    row.className = 'detail-conflict-row';
+    if (filesPageUrl) {
+      row.href = filesPageUrl;
+      row.target = '_blank';
+      row.rel = 'noopener';
+    }
+    const name = document.createElement('span');
+    name.className = 'detail-conflict-name';
+    name.textContent = f.filename;
+    name.title = f.filename;
+    row.appendChild(name);
+    const stats = document.createElement('span');
+    stats.className = 'detail-conflict-stats';
+    stats.textContent = `PR +${f.prAdditions}/-${f.prDeletions} · base +${f.baseAdditions}/-${f.baseDeletions}`;
+    row.appendChild(stats);
+    return row;
+  };
+
+  if (files.length <= CONFLICTS_INLINE_THRESHOLD) {
+    files.forEach((f) => list.appendChild(renderRow(f)));
+  } else {
+    files.slice(0, CONFLICTS_INLINE_THRESHOLD).forEach((f) => list.appendChild(renderRow(f)));
+
+    const tail = files.slice(CONFLICTS_INLINE_THRESHOLD);
+    const tailWrap = document.createElement('div');
+    tailWrap.className = 'detail-conflict-tail hidden';
+    tail.forEach((f) => tailWrap.appendChild(renderRow(f)));
+    list.appendChild(tailWrap);
+
+    const more = document.createElement('button');
+    more.type = 'button';
+    more.className = 'detail-conflict-more';
+    more.textContent = `他 ${tail.length} 件を表示`;
+    more.addEventListener('click', () => {
+      tailWrap.classList.remove('hidden');
+      more.remove();
+    });
+    list.appendChild(more);
+  }
+
+  bannerBody.appendChild(list);
+  banner.appendChild(bannerBody);
+  container.appendChild(banner);
+}
+
 function renderFailedChecks(container, detail) {
   const failed = Array.isArray(detail.failedChecks) ? detail.failedChecks : [];
   const error = detail.failedChecksError;
@@ -1616,47 +1757,504 @@ function renderFailedChecks(container, detail) {
   list.className = 'detail-check-list';
 
   failed.forEach((c) => {
-    // Each entry is rendered as a link when GitHub gave us a destination
-    // URL (Actions log, third-party CI service, etc.); fall back to a plain
-    // div otherwise so the row still appears.
-    const row = document.createElement(c.url ? 'a' : 'div');
-    row.className = 'detail-check';
-    if (c.url) {
-      row.href = c.url;
-      row.target = '_blank';
-      row.rel = 'noopener';
-    }
-
-    const badge = document.createElement('span');
-    badge.className = 'detail-check-badge';
-    badge.textContent = FAILED_CHECK_LABELS[c.conclusion] || c.conclusion || 'Failed';
-    row.appendChild(badge);
-
-    const name = document.createElement('span');
-    name.className = 'detail-check-name';
-    name.textContent = c.name;
-    name.title = c.name;
-    row.appendChild(name);
-
-    if (c.description) {
-      const desc = document.createElement('span');
-      desc.className = 'detail-check-desc';
-      desc.textContent = c.description;
-      desc.title = c.description;
-      row.appendChild(desc);
-    }
-
-    if (c.completedAt) {
-      const time = document.createElement('span');
-      time.className = 'detail-check-time';
-      time.textContent = relativeTime(c.completedAt);
-      row.appendChild(time);
-    }
-
-    list.appendChild(row);
+    list.appendChild(renderFailedCheckEntry(c));
   });
 
   container.appendChild(list);
+}
+
+// Pick the most useful "why did this fail?" payload from a check, in
+// priority order: annotations (file:line precision) → summary (CheckRun
+// markdown) → description (StatusContext blurb). Returns null when none
+// of those are present so callers can collapse the row to "just a link".
+function pickCheckDetail(c) {
+  if (c.annotations && c.annotations.length > 0) {
+    return { kind: 'annotations', annotations: c.annotations };
+  }
+  const summary = c.summary && c.summary.trim();
+  if (summary) return { kind: 'summary', text: summary };
+  const description = c.description && c.description.trim();
+  if (description) return { kind: 'description', text: description };
+  return null;
+}
+
+// One failed check row + on-demand expand. detail (annotations / summary /
+// description) drives whether the row is a button (expandable) or a plain
+// link to the run page.
+function renderFailedCheckEntry(c) {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'detail-check-entry';
+
+  const detail = pickCheckDetail(c);
+  const hasDetail = detail !== null;
+
+  // Header row: clickable to expand when there's detail to show, plain
+  // link to the Actions/CI page when there isn't.
+  const head = document.createElement(hasDetail ? 'button' : c.url ? 'a' : 'div');
+  head.className = 'detail-check';
+  if (hasDetail) {
+    head.type = 'button';
+    head.setAttribute('aria-expanded', 'false');
+  } else if (c.url) {
+    head.href = c.url;
+    head.target = '_blank';
+    head.rel = 'noopener';
+  }
+
+  if (hasDetail) {
+    const caret = document.createElement('span');
+    caret.className = 'detail-check-caret';
+    caret.textContent = '▸';
+    head.appendChild(caret);
+  }
+
+  const badge = document.createElement('span');
+  badge.className = 'detail-check-badge';
+  badge.textContent = FAILED_CHECK_LABELS[c.conclusion] || c.conclusion || 'Failed';
+  head.appendChild(badge);
+
+  const name = document.createElement('span');
+  name.className = 'detail-check-name';
+  name.textContent = c.name;
+  name.title = c.name;
+  head.appendChild(name);
+
+  // For StatusContext (no annotations), the inline description doubles as
+  // the only signal — keep it visible on the row even when collapsed.
+  if (c.description && !c.annotations) {
+    const desc = document.createElement('span');
+    desc.className = 'detail-check-desc';
+    desc.textContent = c.description;
+    desc.title = c.description;
+    head.appendChild(desc);
+  }
+
+  if (c.completedAt) {
+    const time = document.createElement('span');
+    time.className = 'detail-check-time';
+    time.textContent = relativeTime(c.completedAt);
+    head.appendChild(time);
+  }
+
+  wrapper.appendChild(head);
+
+  if (!hasDetail) return wrapper;
+
+  let body = null;
+  head.addEventListener('click', () => {
+    const open = head.getAttribute('aria-expanded') === 'true';
+    if (open) {
+      head.setAttribute('aria-expanded', 'false');
+      head.querySelector('.detail-check-caret').textContent = '▸';
+      if (body) body.style.display = 'none';
+      return;
+    }
+    head.setAttribute('aria-expanded', 'true');
+    head.querySelector('.detail-check-caret').textContent = '▾';
+    if (!body) {
+      body = renderCheckBody(c, detail);
+      wrapper.appendChild(body);
+    } else {
+      body.style.display = '';
+    }
+  });
+
+  return wrapper;
+}
+
+function renderCheckBody(c, detail) {
+  const body = document.createElement('div');
+  body.className = 'detail-check-body';
+
+  if (detail?.kind === 'annotations') {
+    const list = document.createElement('div');
+    list.className = 'detail-check-annotations';
+    for (const a of detail.annotations) {
+      const row = document.createElement('div');
+      row.className = `detail-check-annotation ${a.level === 'WARNING' ? 'warn' : 'fail'}`;
+      const loc = document.createElement('span');
+      loc.className = 'detail-check-annotation-loc';
+      loc.textContent = a.path ? (a.startLine ? `${a.path}:${a.startLine}` : a.path) : '(no path)';
+      row.appendChild(loc);
+      if (a.title) {
+        const t = document.createElement('div');
+        t.className = 'detail-check-annotation-title';
+        t.textContent = a.title;
+        row.appendChild(t);
+      }
+      const msg = document.createElement('div');
+      msg.className = 'detail-check-annotation-msg';
+      msg.textContent = a.message || '';
+      row.appendChild(msg);
+      list.appendChild(row);
+    }
+    body.appendChild(list);
+  } else if (detail?.kind === 'summary' || detail?.kind === 'description') {
+    const sum = document.createElement('pre');
+    sum.className = 'detail-check-summary';
+    sum.textContent = detail.text;
+    body.appendChild(sum);
+  }
+
+  // Open-in-GitHub for the underlying run/log
+  if (c.url) {
+    const link = document.createElement('a');
+    link.className = 'detail-check-body-link';
+    link.href = c.url;
+    link.target = '_blank';
+    link.rel = 'noopener';
+    link.textContent = 'GitHub で開く';
+    body.appendChild(link);
+  }
+
+  // AI analysis button — only when AI server is up AND there's something to
+  // feed it. Prompt is composed locally so it's well-scoped: "this is a
+  // failed CI check, here's what GitHub reported".
+  const analysisInput = composeCheckAnalysisInput(c, detail);
+  const ctx = paneContext();
+  const cacheKey = checkCacheKey(ctx, c, analysisInput || '');
+  if (isAiAvailable() && analysisInput && cacheKey) {
+    const aiBtn = document.createElement('button');
+    aiBtn.className = 'detail-check-ai-btn';
+    aiBtn.type = 'button';
+    aiBtn.textContent = 'AI で原因分析';
+
+    const label = `${ctx.owner}/${ctx.repo}#${ctx.number} ${c.name}`;
+
+    if (aiTasksInProgress.has(cacheKey)) {
+      aiBtn.textContent = '分析中…';
+      aiBtn.disabled = true;
+    }
+
+    aiBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      aiBtn.textContent = '分析中…';
+      aiBtn.disabled = true;
+      startAiAnalysis({
+        key: cacheKey,
+        label,
+        run: () => api.aiSummarize(analysisInput),
+        onComplete: ({ summary, cli }) => {
+          if (document.contains(body)) {
+            renderSummaryInto(body, 'check', { summary, cli, at: null });
+            aiBtn.textContent = '再要約';
+            aiBtn.disabled = false;
+          }
+        },
+        onError: () => {
+          if (document.contains(aiBtn)) {
+            aiBtn.textContent = 'AI で原因分析';
+            aiBtn.disabled = false;
+          }
+        },
+      });
+    });
+    body.appendChild(aiBtn);
+
+    const cached = readAiSummary(cacheKey);
+    if (cached) {
+      renderSummaryInto(body, 'check', cached);
+      aiBtn.textContent = '再要約';
+    }
+  }
+
+  return body;
+}
+
+function composeCheckAnalysisInput(c, detail) {
+  if (!detail) return null;
+  const parts = [`Failed CI check: ${c.name}`, `Conclusion: ${c.conclusion}`];
+  if (detail.kind === 'annotations') {
+    parts.push('\nAnnotations:');
+    for (const a of detail.annotations) {
+      const loc = a.path ? (a.startLine ? `${a.path}:${a.startLine}` : a.path) : '(no path)';
+      parts.push(`- [${a.level || 'FAILURE'}] ${loc}`);
+      if (a.title) parts.push(`  title: ${a.title}`);
+      if (a.message) parts.push(`  message: ${a.message}`);
+    }
+  } else {
+    parts.push(`\n${detail.kind === 'summary' ? 'Summary' : 'Description'}:`);
+    parts.push(detail.text);
+  }
+  return parts.join('\n');
+}
+
+// Background AI analysis tasks live here so they survive the detail pane
+// being closed. Key is the localStorage cache key, so a repeated click on
+// the same check coalesces into one in-flight request.
+const aiTasksInProgress = new Map(); // key -> { label, startedAt }
+
+function updateAiTaskIndicator() {
+  const el = document.getElementById('ai-tasks-indicator');
+  if (!el) return;
+  const count = aiTasksInProgress.size;
+  if (count === 0) {
+    el.classList.add('hidden');
+    return;
+  }
+  el.classList.remove('hidden');
+  el.title = [...aiTasksInProgress.values()].map((t) => t.label).join(' / ');
+  const countEl = el.querySelector('.ai-tasks-count');
+  if (countEl) countEl.textContent = String(count);
+}
+
+// Fire-and-forget AI request. Pane can close, navigation can change —
+// the request still resolves: result lands in localStorage cache, header
+// indicator decrements, native notification + toast announce completion.
+// Repeated clicks while one is in-flight are deduped via the cache key.
+//
+// `run` returns a Promise<{ summary, cli }>; callers swap in
+// api.aiSummarize / api.aiSummarizePR / future endpoints without this
+// helper needing to know which.
+function startAiAnalysis({ key, label, run, onComplete, onError }) {
+  if (!key || typeof run !== 'function') return;
+  if (aiTasksInProgress.has(key)) {
+    showToast(`既に分析中: ${label}`, 'info');
+    return;
+  }
+  aiTasksInProgress.set(key, { label, startedAt: Date.now() });
+  updateAiTaskIndicator();
+
+  Promise.resolve()
+    .then(() => run())
+    .then(({ summary, cli }) => {
+      writeAiSummary(key, summary, cli);
+      sendNotification('AI 要約完了', label);
+      showToast(`AI 要約完了: ${label}`, 'success');
+      if (typeof onComplete === 'function') onComplete({ summary, cli });
+    })
+    .catch((err) => {
+      showToast(`AI 要約失敗 (${label}): ${err.message}`, 'error');
+      if (typeof onError === 'function') onError(err);
+    })
+    .finally(() => {
+      aiTasksInProgress.delete(key);
+      updateAiTaskIndicator();
+    });
+}
+
+// Hard cap on rendered diff lines per file. A handful of files in real PRs
+// contain thousands of lines (lockfiles, generated bundles); rendering them
+// all freezes the pane and bloats the DOM. Anything above this is truncated
+// with a note + a link to the full diff on GitHub.
+const MAX_DIFF_LINES = 500;
+
+// Parse a unified diff hunk header `@@ -<oldStart>,<oldLen> +<newStart>,<newLen> @@`
+// and return the starting old/new line numbers. Length fields are optional in
+// single-line hunks (`@@ -3 +3 @@`).
+const HUNK_RE = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
+
+// Map filename → highlight.js language id. Bundled cdn-assets common build
+// covers all of these. Extensions not listed here render with no highlight
+// (still readable thanks to the +/- gutter coloring).
+const HLJS_BY_EXT = {
+  js: 'javascript',
+  mjs: 'javascript',
+  cjs: 'javascript',
+  jsx: 'javascript',
+  ts: 'typescript',
+  tsx: 'typescript',
+  py: 'python',
+  rb: 'ruby',
+  go: 'go',
+  rs: 'rust',
+  java: 'java',
+  kt: 'kotlin',
+  swift: 'swift',
+  c: 'c',
+  h: 'c',
+  cpp: 'cpp',
+  cc: 'cpp',
+  hpp: 'cpp',
+  cs: 'csharp',
+  php: 'php',
+  json: 'json',
+  yaml: 'yaml',
+  yml: 'yaml',
+  toml: 'ini',
+  xml: 'xml',
+  html: 'xml',
+  htm: 'xml',
+  css: 'css',
+  scss: 'scss',
+  less: 'less',
+  md: 'markdown',
+  markdown: 'markdown',
+  sh: 'bash',
+  bash: 'bash',
+  zsh: 'bash',
+  sql: 'sql',
+  dart: 'dart',
+  dockerfile: 'dockerfile',
+  vue: 'xml',
+  svelte: 'xml',
+};
+const HLJS_BY_BASENAME = {
+  Dockerfile: 'dockerfile',
+  Makefile: 'makefile',
+  '.gitignore': 'plaintext',
+};
+
+function detectHljsLang(filename) {
+  if (!filename) return null;
+  const base = filename.split('/').pop();
+  if (HLJS_BY_BASENAME[base]) return HLJS_BY_BASENAME[base];
+  const dotIdx = base.lastIndexOf('.');
+  if (dotIdx === -1) return null;
+  return HLJS_BY_EXT[base.slice(dotIdx + 1).toLowerCase()] || null;
+}
+
+function highlightLine(body, lang) {
+  // Skip when hljs isn't loaded (CSP blocked it / lib missing) or the
+  // language isn't bundled. Fall back to plain text — caller renders via
+  // textContent in that case.
+  const hljs = window.hljs;
+  if (!hljs || !lang || !hljs.getLanguage(lang)) return null;
+  try {
+    return hljs.highlight(body, { language: lang, ignoreIllegals: true }).value;
+  } catch {
+    return null;
+  }
+}
+
+// Lazy-load language modules from jsdelivr that aren't part of the bundled
+// common build (Dart, Dockerfile, Elixir, Zig, Terraform, ...). Pinned to
+// the same version we ship locally so the upstream API can't drift.
+const HLJS_VERSION = '11.11.1';
+const langLoadPromises = new Map();
+function isLangLoaded(lang) {
+  return !!window.hljs?.getLanguage(lang);
+}
+function loadLang(lang) {
+  if (!lang) return Promise.resolve(false);
+  if (isLangLoaded(lang)) return Promise.resolve(true);
+  if (langLoadPromises.has(lang)) return langLoadPromises.get(lang);
+  const url = `https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@${HLJS_VERSION}/languages/${lang}.min.js`;
+  const p = new Promise((resolve) => {
+    const script = document.createElement('script');
+    script.src = url;
+    script.async = true;
+    script.onload = () => resolve(isLangLoaded(lang));
+    // Drop the rejected promise so a later expand can retry. Without
+    // this delete the user has to reload the page after a transient
+    // network blip.
+    script.onerror = () => {
+      langLoadPromises.delete(lang);
+      resolve(false);
+    };
+    document.head.appendChild(script);
+  });
+  langLoadPromises.set(lang, p);
+  return p;
+}
+
+function renderFileDiff(file) {
+  const wrap = document.createElement('div');
+  wrap.className = 'detail-file-diff';
+
+  if (file.patch == null) {
+    // GitHub omits patch for binary files (images, fonts) and very large
+    // entries. Surface the reason rather than an empty box.
+    const note = document.createElement('div');
+    note.className = 'detail-file-diff-note';
+    note.textContent = 'バイナリファイル、または GitHub が diff を返さなかったファイルです';
+    wrap.appendChild(note);
+    return wrap;
+  }
+
+  const lines = file.patch.split('\n');
+  const truncated = lines.length > MAX_DIFF_LINES;
+  const visible = truncated ? lines.slice(0, MAX_DIFF_LINES) : lines;
+  const lang = detectHljsLang(file.filename);
+
+  // Two columns of line numbers + the source line, laid out in a single CSS
+  // grid (one row per diff line). Children are appended directly to the
+  // grid container — wrapping each row in a div with `display: contents`
+  // is still buggy for grid in Safari 16.
+  const grid = document.createElement('div');
+  grid.className = 'detail-file-diff-grid';
+
+  let oldLine = 0;
+  let newLine = 0;
+
+  for (const raw of visible) {
+    if (raw.startsWith('@@')) {
+      const m = raw.match(HUNK_RE);
+      if (m) {
+        oldLine = parseInt(m[1], 10);
+        newLine = parseInt(m[2], 10);
+      }
+      const hunk = document.createElement('div');
+      hunk.className = 'diff-hunk';
+      hunk.textContent = raw;
+      grid.appendChild(hunk);
+      continue;
+    }
+
+    let cls = 'diff-context';
+    let oldNum = '';
+    let newNum = '';
+
+    let prefix = '';
+    let body = raw;
+    if (raw.startsWith('+') && !raw.startsWith('+++')) {
+      cls = 'diff-add';
+      prefix = '+';
+      body = raw.slice(1);
+      newNum = String(newLine);
+      newLine += 1;
+    } else if (raw.startsWith('-') && !raw.startsWith('---')) {
+      cls = 'diff-del';
+      prefix = '-';
+      body = raw.slice(1);
+      oldNum = String(oldLine);
+      oldLine += 1;
+    } else if (raw.startsWith('---') || raw.startsWith('+++')) {
+      // GitHub usually strips the `--- a/...` / `+++ b/...` headers, but
+      // be defensive in case a future API revision starts including them.
+      cls = 'diff-meta';
+    } else {
+      // Unified diff context lines start with a single space — drop it so
+      // body holds the actual source line as it appears in the file.
+      body = raw.startsWith(' ') ? raw.slice(1) : raw;
+      oldNum = String(oldLine);
+      newNum = String(newLine);
+      oldLine += 1;
+      newLine += 1;
+    }
+
+    const oldEl = document.createElement('span');
+    oldEl.className = `diff-num ${cls}`;
+    oldEl.textContent = oldNum;
+
+    const newEl = document.createElement('span');
+    newEl.className = `diff-num ${cls}`;
+    newEl.textContent = newNum;
+
+    const codeEl = document.createElement('span');
+    codeEl.className = `diff-code ${cls}`;
+    // Render the +/- prefix via a CSS ::before with the data-prefix attr so
+    // it's excluded from text selection and copy.
+    codeEl.dataset.prefix = prefix;
+    const safeBody = body === '' ? ' ' : body;
+    const highlighted = cls === 'diff-meta' ? null : highlightLine(safeBody, lang);
+    if (highlighted) {
+      codeEl.innerHTML = highlighted;
+    } else {
+      codeEl.textContent = safeBody;
+    }
+
+    grid.append(oldEl, newEl, codeEl);
+  }
+  wrap.appendChild(grid);
+
+  if (truncated) {
+    const note = document.createElement('div');
+    note.className = 'detail-file-diff-note';
+    note.textContent = `${MAX_DIFF_LINES} 行で打ち切り (全 ${lines.length} 行)。続きは GitHub で確認してください。`;
+    wrap.appendChild(note);
+  }
+  return wrap;
 }
 
 function renderDetailContent(container, detail) {
@@ -1756,13 +2354,17 @@ function renderDetailContent(container, detail) {
   });
   container.appendChild(meta);
 
+  // Conflict candidates banner. Sits below Changes / Files but its
+  // styling makes "this PR can't merge cleanly" stand out anyway.
+  renderConflictFiles(container, detail);
+
   // Failed CI checks: only render the section when there's something to act
   // on (failed run, fetch error, or — when explicitly red — a "no failing
   // contexts to enumerate" hint). Successful/pending rollups stay hidden so
   // the pane isn't dominated by green ticks.
   renderFailedChecks(container, detail);
 
-  // Files
+  // Files (clickable to expand the unified diff inline)
   if (detail.files.length > 0) {
     const filesTitle = document.createElement('div');
     filesTitle.className = 'detail-section-title';
@@ -1773,8 +2375,18 @@ function renderDetailContent(container, detail) {
     fileList.className = 'detail-file-list';
 
     detail.files.forEach((f) => {
-      const row = document.createElement('div');
+      const wrapper = document.createElement('div');
+      wrapper.className = 'detail-file-entry';
+
+      const row = document.createElement('button');
+      row.type = 'button';
       row.className = 'detail-file';
+      row.setAttribute('aria-expanded', 'false');
+
+      const caret = document.createElement('span');
+      caret.className = 'detail-file-caret';
+      caret.textContent = '▸';
+      row.appendChild(caret);
 
       const badge = document.createElement('span');
       badge.className = `detail-file-badge ${f.status}`;
@@ -1800,7 +2412,40 @@ function renderDetailContent(container, detail) {
         row.appendChild(del);
       }
 
-      fileList.appendChild(row);
+      wrapper.appendChild(row);
+
+      // Diff body — created lazily on first expand to avoid building DOM
+      // for files the user never opens (a 100-file PR would otherwise
+      // build 100 patch DOM trees up front).
+      let diffEl = null;
+      const toggle = async () => {
+        const isOpen = row.getAttribute('aria-expanded') === 'true';
+        if (isOpen) {
+          row.setAttribute('aria-expanded', 'false');
+          caret.textContent = '▸';
+          if (diffEl) diffEl.style.display = 'none';
+          return;
+        }
+        row.setAttribute('aria-expanded', 'true');
+        caret.textContent = '▾';
+        if (!diffEl) {
+          // Resolve the highlight.js language for this filename and lazy
+          // load it from jsdelivr if it's not already in the bundled set.
+          // Render proceeds even if the load fails — diff just falls back
+          // to plain text.
+          const lang = detectHljsLang(f.filename);
+          if (lang && !isLangLoaded(lang)) {
+            await loadLang(lang);
+          }
+          diffEl = renderFileDiff(f);
+          wrapper.appendChild(diffEl);
+        } else {
+          diffEl.style.display = '';
+        }
+      };
+      row.addEventListener('click', toggle);
+
+      fileList.appendChild(wrapper);
     });
     container.appendChild(fileList);
   }

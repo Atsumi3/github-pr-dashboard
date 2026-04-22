@@ -15,6 +15,9 @@ export default [
       'docs/screenshots/**',
       'docs/mockup.html',
       'docs/design-historical.md',
+      // Bundled third-party JS (highlight.js, BSD-3-Clause). Keep as-is so
+      // we never modify the upstream artefact.
+      'frontend/js/lib/**',
     ],
   },
 
