@@ -332,6 +332,37 @@ export function initSettings() {
 // AI status panel — fetches /api/ai/status and renders the CLI list at the
 // bottom of the sidebar. Auto-refreshes when settings dialog saves config.
 let aiStatusCache = null;
+const aiAvailabilityListeners = new Set();
+
+// True when ai-server responds AND the configured CLI is actually installed.
+// Frontend uses this to gate AI buttons (graceful degradation when ai-server
+// is not running).
+export function isAiAvailable() {
+  if (!aiStatusCache) return false;
+  const cli = aiStatusCache.cli;
+  if (!cli) return false;
+  return aiStatusCache.available?.[cli]?.available === true;
+}
+
+export function onAiAvailabilityChange(listener) {
+  aiAvailabilityListeners.add(listener);
+  return () => aiAvailabilityListeners.delete(listener);
+}
+
+function setAiStatusCache(next) {
+  const before = isAiAvailable();
+  aiStatusCache = next;
+  const after = isAiAvailable();
+  if (before !== after) {
+    for (const fn of aiAvailabilityListeners) {
+      try {
+        fn(after);
+      } catch (err) {
+        console.warn('AI availability listener threw:', err);
+      }
+    }
+  }
+}
 
 export async function initAiPanel() {
   const btn = document.getElementById('btn-ai-settings');
@@ -346,10 +377,10 @@ export async function refreshAiPanel() {
   while (list.firstChild) list.firstChild.remove();
   try {
     const status = await api.aiStatus();
-    aiStatusCache = status;
+    setAiStatusCache(status);
     renderAiStatusList(list, status);
   } catch (err) {
-    aiStatusCache = null;
+    setAiStatusCache(null);
     const msg = document.createElement('div');
     msg.className = 'ai-status-offline';
     msg.textContent =
@@ -552,7 +583,7 @@ function renderAiSettingsDialog(status) {
           summarizePr: p2Area.value,
         },
       });
-      aiStatusCache = updated;
+      setAiStatusCache(updated);
       const list = document.getElementById('ai-status-list');
       if (list) {
         while (list.firstChild) list.firstChild.remove();

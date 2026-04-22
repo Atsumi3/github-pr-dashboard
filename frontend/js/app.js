@@ -4,6 +4,9 @@ import {
   renderRepoList,
   initSettings,
   initAiPanel,
+  refreshAiPanel,
+  isAiAvailable,
+  onAiAvailabilityChange,
   showToast,
   isRepoVisible,
   confirmDialog,
@@ -1235,20 +1238,28 @@ function renderDetailContent(container, detail) {
   openBtn.textContent = 'Open in GitHub';
   actionRow.appendChild(openBtn);
 
-  const summarizePrBtn = document.createElement('button');
-  summarizePrBtn.className = 'detail-pr-summary-btn';
-  summarizePrBtn.textContent = 'PR全体をAIで要約';
-  actionRow.appendChild(summarizePrBtn);
-
-  container.appendChild(actionRow);
-
+  // AI summary button is opt-in: render only when ai-server is reachable
+  // and a usable CLI is configured. Without this, clicking the button when
+  // ai-server is down would just show a 503 toast.
+  let summarizePrBtn = null;
   const prSummaryHost = document.createElement('div');
   prSummaryHost.className = 'detail-pr-summary-host';
+
+  if (isAiAvailable()) {
+    summarizePrBtn = document.createElement('button');
+    summarizePrBtn.className = 'detail-pr-summary-btn';
+    summarizePrBtn.textContent = 'PR全体をAIで要約';
+    actionRow.appendChild(summarizePrBtn);
+  }
+
+  container.appendChild(actionRow);
   container.appendChild(prSummaryHost);
 
-  summarizePrBtn.addEventListener('click', async () => {
-    await runPRSummarize(prSummaryHost, summarizePrBtn, detail);
-  });
+  if (summarizePrBtn) {
+    summarizePrBtn.addEventListener('click', async () => {
+      await runPRSummarize(prSummaryHost, summarizePrBtn, detail);
+    });
+  }
 
   // Meta stats
   const metaTitle = document.createElement('div');
@@ -1379,17 +1390,19 @@ function renderDetailContent(container, detail) {
       }
       headerRow.appendChild(loc);
 
-      const aiBtn = document.createElement('button');
-      aiBtn.className = 'detail-ai-btn';
-      aiBtn.textContent = 'AIで要約';
-      aiBtn.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        const allText = thread.comments
-          .map((c) => `${c.author?.login || 'unknown'}: ${c.body}`)
-          .join('\n\n');
-        await runSummarize(card, aiBtn, allText);
-      });
-      headerRow.appendChild(aiBtn);
+      if (isAiAvailable()) {
+        const aiBtn = document.createElement('button');
+        aiBtn.className = 'detail-ai-btn';
+        aiBtn.textContent = 'AIで要約';
+        aiBtn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const allText = thread.comments
+            .map((c) => `${c.author?.login || 'unknown'}: ${c.body}`)
+            .join('\n\n');
+          await runSummarize(card, aiBtn, allText);
+        });
+        headerRow.appendChild(aiBtn);
+      }
 
       card.appendChild(headerRow);
 
@@ -1482,10 +1495,38 @@ document.addEventListener('visibilitychange', () => {
   } else {
     startLastUpdatedTimer();
     updateLastUpdatedDisplay();
+    // Re-check ai-server availability so a freshly-started ai-server is
+    // picked up without a full page reload.
+    refreshAiPanel();
     // Throttle: if we fetched very recently, only restart the timer without an immediate fetch.
     const elapsed = Date.now() - lastFetchAt;
     const skipImmediate = lastFetchAt > 0 && elapsed < VISIBILITY_REFETCH_THRESHOLD;
     startPolling({ skipImmediate });
+  }
+});
+
+// When AI availability flips (ai-server starts/stops), if the detail pane is
+// open, re-render it so the AI buttons appear/disappear without a manual close.
+onAiAvailabilityChange(() => {
+  const pane = document.getElementById('detail-pane');
+  if (!pane || pane.classList.contains('hidden')) return;
+  // The detail pane state we need is owner/repo/number/title — recover from
+  // the title we displayed. If the heuristic fails, no harm; the user can
+  // close+reopen.
+  const title = document.getElementById('detail-title')?.textContent || '';
+  const m = title.match(/^#(\d+)\s+(.+)$/);
+  if (!m) return;
+  // Parse owner/repo from the cached lastData by matching PR number.
+  if (!lastData?.repos) return;
+  for (const repo of lastData.repos) {
+    const pr = repo.prs.find((p) => String(p.number) === m[1]);
+    if (pr) {
+      const [owner, name] = repo.repo.split('/');
+      // Bypass paneCache so we get fresh content reflecting new availability.
+      paneCache.delete(`${owner}/${name}#${pr.number}`);
+      openDetailPane(owner, name, pr.number, pr.title);
+      return;
+    }
   }
 });
 
