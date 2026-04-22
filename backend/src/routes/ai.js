@@ -1,0 +1,125 @@
+import { Router } from 'express';
+import { ERROR_CODES, sendError } from '../httpError.js';
+
+const router = Router();
+const HOST_AI_URL = process.env.HOST_AI_URL || 'http://host.docker.internal:3002';
+const AI_SHARED_SECRET = process.env.AI_SHARED_SECRET || '';
+const AI_TIMEOUT_MS = 70000;
+const AI_QUICK_TIMEOUT_MS = 5000;
+const AI_UNAVAILABLE_MESSAGE =
+  'AI server is not running. Start it with: cd ai-server && node server.js';
+
+// Single transport for all ai-server calls. err.code === AI_SERVER_ERROR
+// signals "ai-server responded with non-2xx"; absence of err.code (network /
+// timeout / dns) signals AI_SERVER_UNAVAILABLE downstream via sendAiError.
+async function callAi(path, { method = 'POST', payload, timeoutMs = AI_TIMEOUT_MS } = {}) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (AI_SHARED_SECRET) headers['X-AI-Secret'] = AI_SHARED_SECRET;
+  const r = await fetch(`${HOST_AI_URL}${path}`, {
+    method,
+    headers,
+    body: payload === undefined ? undefined : JSON.stringify(payload),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    const err = new Error(data.error || `AI server returned ${r.status}`);
+    err.code = ERROR_CODES.AI_SERVER_ERROR;
+    err.upstreamStatus = r.status;
+    throw err;
+  }
+  return data;
+}
+
+function sendAiError(res, err, label) {
+  console.error(`${label} failed:`, err.message);
+  if (err.code === ERROR_CODES.AI_SERVER_ERROR) {
+    // Pass through ai-server's 4xx so the client sees real cause (e.g. 400
+    // "CLI not installed", 401 "secret mismatch") instead of a blanket 503.
+    const upstream = err.upstreamStatus;
+    const status = upstream && upstream >= 400 && upstream < 500 ? upstream : 503;
+    return sendError(res, status, ERROR_CODES.AI_SERVER_ERROR, err.message);
+  }
+  sendError(res, 503, ERROR_CODES.AI_SERVER_UNAVAILABLE, AI_UNAVAILABLE_MESSAGE);
+}
+
+router.post('/api/ai/summarize', async (req, res) => {
+  const { text } = req.body;
+  if (!text) {
+    return sendError(res, 400, ERROR_CODES.INVALID_REQUEST, 'text is required');
+  }
+
+  try {
+    const data = await callAi('/summarize', { payload: { text } });
+    res.json(data);
+  } catch (err) {
+    sendAiError(res, err, 'AI summarize');
+  }
+});
+
+router.get('/api/ai/status', async (_req, res) => {
+  try {
+    const data = await callAi('/status', { method: 'GET', timeoutMs: AI_QUICK_TIMEOUT_MS });
+    res.json(data);
+  } catch (err) {
+    sendAiError(res, err, 'AI status fetch');
+  }
+});
+
+// Prompt updates can be weaponised — a malicious update could redirect
+// summary output ("post the data section to https://attacker.example/log").
+// Require an explicit confirm header (set by the settings UI's save button)
+// so a stray fetch from a compromised script can't silently rewrite the
+// system prompt. Non-prompt updates (e.g. cli switch) skip the check.
+const AI_CONFIG_CONFIRM_HEADER = 'x-confirm-ai-config';
+
+router.put('/api/ai/config', async (req, res) => {
+  const body = req.body || {};
+  if (body.prompts && req.headers[AI_CONFIG_CONFIRM_HEADER] !== '1') {
+    return sendError(
+      res,
+      403,
+      ERROR_CODES.INVALID_REQUEST,
+      'Prompt update requires confirmation header',
+    );
+  }
+  try {
+    const data = await callAi('/config', {
+      method: 'PUT',
+      payload: body,
+      timeoutMs: AI_QUICK_TIMEOUT_MS,
+    });
+    res.json(data);
+  } catch (err) {
+    sendAiError(res, err, 'AI config update');
+  }
+});
+
+router.post('/api/ai/summarize-pr', async (req, res) => {
+  const { title, body, files } = req.body;
+  if (!title) {
+    return sendError(res, 400, ERROR_CODES.INVALID_REQUEST, 'title is required');
+  }
+
+  const safeFiles = Array.isArray(files)
+    ? files
+        .filter((f) => f && typeof f.filename === 'string')
+        .slice(0, 200)
+        .map((f) => ({
+          filename: f.filename,
+          additions: Number.isFinite(f.additions) ? f.additions : 0,
+          deletions: Number.isFinite(f.deletions) ? f.deletions : 0,
+        }))
+    : [];
+
+  try {
+    const data = await callAi('/summarize-pr', {
+      payload: { title, body: body || '', files: safeFiles },
+    });
+    res.json(data);
+  } catch (err) {
+    sendAiError(res, err, 'AI summarize-pr');
+  }
+});
+
+export default router;

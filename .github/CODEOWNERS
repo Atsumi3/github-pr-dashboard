@@ -1,0 +1,3 @@
+# Default reviewer for every change. Repository owner has implicit review on
+# all PRs; add more lines below as the project grows.
+* @Atsumi3
