@@ -543,10 +543,16 @@ function describeRepoError(error) {
     };
   }
   if (status === 403) {
+    // GitHub returns 403 for both rate limit AND permission errors (SAML SSO
+    // not authorised, scope missing). Sniff the error message to tell them
+    // apart since the backend doesn't currently parse X-RateLimit-Remaining.
+    const isRate = /rate.?limit/i.test(message || '');
     return {
-      tag: 'Rate limited',
-      body: 'GitHub のレート制限に達しています',
-      severity: 'transient',
+      tag: isRate ? 'Rate limited' : 'Forbidden',
+      body: isRate
+        ? 'GitHub のレート制限に達しています'
+        : 'このリポジトリへのアクセスが拒否されました (scope / SSO を確認してください)',
+      severity: isRate ? 'transient' : 'permanent',
       tooltip: message,
     };
   }
@@ -559,9 +565,12 @@ function describeRepoError(error) {
     };
   }
   if (status >= 500 && status < 600) {
+    // The backend's gqlWithRetry already retried 3x; what the user sees here
+    // is the post-retry state. Don't promise more retries — point them at the
+    // per-repo refresh button instead.
     return {
       tag: 'GitHub error',
-      body: `GitHub が一時的に応答していません (HTTP ${status})。自動リトライ中…`,
+      body: `GitHub が一時的に応答していません (HTTP ${status})。右上の ⟳ ボタンで再取得できます`,
       severity: 'transient',
       tooltip: message,
     };
@@ -714,7 +723,15 @@ async function loadSingleRepo(repoId) {
       paused: lastDataPaused(repoId),
     };
     const newSection = renderRepoSection(repoData);
-    main.insertBefore(newSection, main.firstChild);
+    // Replace the existing section in place if present (per-repo refresh path)
+    // — without this, a second copy of the repo gets prepended and lingers
+    // until the next full reconcile.
+    const existing = main.querySelector(`.repo-section[data-repo="${CSS.escape(repoId)}"]`);
+    if (existing) {
+      existing.replaceWith(newSection);
+    } else {
+      main.insertBefore(newSection, main.firstChild);
+    }
     upsertLastDataRepo(repoData);
     // Keep lastRenderSig in sync so the very next loadPRs() doesn't fall into
     // a redundant full reconcile when the polled data matches what we just
@@ -1189,6 +1206,14 @@ function openDetailPane(owner, repo, number, title) {
   const titleEl = document.getElementById('detail-title');
   const content = document.getElementById('detail-content');
 
+  // Stash the active PR's identity on the DOM so the AI-availability flip
+  // handler can re-render exactly this pane without reverse-parsing the title
+  // (which would mis-fire when two repos share a PR number).
+  pane.dataset.owner = owner;
+  pane.dataset.repo = repo;
+  pane.dataset.number = String(number);
+  pane.dataset.title = title;
+
   titleEl.textContent = `#${number} ${title}`;
   content.textContent = '';
 
@@ -1581,8 +1606,9 @@ document.addEventListener('visibilitychange', () => {
     startLastUpdatedTimer();
     updateLastUpdatedDisplay();
     // Re-check ai-server availability so a freshly-started ai-server is
-    // picked up without a full page reload.
-    refreshAiPanel();
+    // picked up without a full page reload. Throttled to avoid spamming
+    // /api/ai/status when the user rapidly cycles through tabs.
+    maybeRefreshAi();
     // Throttle: if we fetched very recently, only restart the timer without an immediate fetch.
     const elapsed = Date.now() - lastFetchAt;
     const skipImmediate = lastFetchAt > 0 && elapsed < VISIBILITY_REFETCH_THRESHOLD;
@@ -1590,29 +1616,34 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 
-// When AI availability flips (ai-server starts/stops), if the detail pane is
-// open, re-render it so the AI buttons appear/disappear without a manual close.
-onAiAvailabilityChange(() => {
+const AI_REFRESH_COOLDOWN_MS = 30_000;
+let lastAiRefreshAt = 0;
+
+function maybeRefreshAi() {
+  if (Date.now() - lastAiRefreshAt < AI_REFRESH_COOLDOWN_MS) return;
+  lastAiRefreshAt = Date.now();
+  refreshAiPanel();
+}
+
+// When AI availability flips, adjust the open detail pane in-place. We avoid
+// re-fetching the PR detail (which would discard a freshly-generated AI
+// summary the user is reading) and only touch the AI buttons:
+//   - false: remove the AI action buttons (the requests would only 503)
+//   - true:  re-render via openDetailPane so the buttons reappear; the cached
+//            detail (if still warm in paneCache) is reused, no API call
+onAiAvailabilityChange((available) => {
   const pane = document.getElementById('detail-pane');
   if (!pane || pane.classList.contains('hidden')) return;
-  // The detail pane state we need is owner/repo/number/title — recover from
-  // the title we displayed. If the heuristic fails, no harm; the user can
-  // close+reopen.
-  const title = document.getElementById('detail-title')?.textContent || '';
-  const m = title.match(/^#(\d+)\s+(.+)$/);
-  if (!m) return;
-  // Parse owner/repo from the cached lastData by matching PR number.
-  if (!lastData?.repos) return;
-  for (const repo of lastData.repos) {
-    const pr = repo.prs.find((p) => String(p.number) === m[1]);
-    if (pr) {
-      const [owner, name] = repo.repo.split('/');
-      // Bypass paneCache so we get fresh content reflecting new availability.
-      paneCache.delete(`${owner}/${name}#${pr.number}`);
-      openDetailPane(owner, name, pr.number, pr.title);
-      return;
-    }
+  if (!available) {
+    pane.querySelectorAll('.detail-pr-summary-btn, .detail-ai-btn').forEach((b) => b.remove());
+    return;
   }
+  const owner = pane.dataset.owner;
+  const repo = pane.dataset.repo;
+  const number = Number(pane.dataset.number);
+  const title = pane.dataset.title;
+  if (!owner || !repo || !Number.isFinite(number)) return;
+  openDetailPane(owner, repo, number, title || '');
 });
 
 function applyUserToHeader(user) {
