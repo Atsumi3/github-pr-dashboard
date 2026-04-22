@@ -528,7 +528,7 @@ PR タイトルクリックで開く右側ドロワー。
 | 幅             | min(560px, 90vw) (>=2560px は 680px、>=3840px は 820px)                                        |
 | 開く           | `transform: translateX(100%) → translateX(0)`、`200ms ease-out`                                |
 | 閉じる         | `transform: translateX(0) → translateX(100%)`、`200ms ease-out` (display は維持して対称アニメ) |
-| オーバーレイ   | `opacity 0 ↔ 1` を 200ms で連動、`pointer-events: none` で操作も遮断                          |
+| オーバーレイ   | `opacity 0 ↔ 1` を 200ms で連動、`pointer-events: none` で操作も遮断                           |
 | 閉じるトリガー | × ボタン / オーバーレイクリック / Esc                                                          |
 | フォーカス管理 | 開いた時は閉じるボタンへ。閉じた時は呼び出し元 (lastDetailTrigger) へ復帰                      |
 | 役割属性       | `role="dialog"`, `aria-modal="true"`, `aria-labelledby="detail-title"`                         |
@@ -773,10 +773,10 @@ PR データ取得中にスケルトンスクリーンを表示する。
 
 ### 6.6 サイドバー開閉 (タブレット以下)
 
-| プロパティ   | 値                                                                               |
-| ------------ | -------------------------------------------------------------------------------- |
-| 開く         | transform: translateX(0), 200ms ease-out                                         |
-| 閉じる       | transform: translateX(-100%), 200ms ease-in (display は維持して対称化)           |
+| プロパティ   | 値                                                                              |
+| ------------ | ------------------------------------------------------------------------------- |
+| 開く         | transform: translateX(0), 200ms ease-out                                        |
+| 閉じる       | transform: translateX(-100%), 200ms ease-in (display は維持して対称化)          |
 | オーバーレイ | display: block を保ったまま opacity 0 ↔ 1 を 200ms、`pointer-events` で操作遮断 |
 
 ### 6.7 トースト通知
