@@ -2377,6 +2377,7 @@ body {
   gap: var(--space-3);
   padding: var(--space-3) var(--space-4);
   background: var(--status-changes-bg);
+  border: none;
   border-left: 2px solid var(--status-changes);
   border-radius: var(--radius-sm);
   text-decoration: none;
@@ -2385,13 +2386,8 @@ body {
   font-family: inherit;
   text-align: left;
   width: 100%;
-  border: none;
-  border-left: 2px solid var(--status-changes);
   cursor: pointer;
   transition: background var(--transition);
-}
-button.detail-check {
-  cursor: pointer;
 }
 a.detail-check:hover,
 button.detail-check:hover {
@@ -2786,6 +2782,10 @@ body.loading .loading-overlay {
 }
 .toast-error {
   border-color: rgba(248, 81, 73, 0.3);
+}
+.toast-info {
+  border-color: rgba(199, 206, 234, 0.4);
+  color: var(--status-review-text);
 }
 .toast-fade {
   opacity: 0;

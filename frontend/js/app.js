@@ -1459,6 +1459,12 @@ function threadCacheKey(ctx, thread) {
   return `thread:${ctx.owner}/${ctx.repo}#${ctx.number}:${thread.path}:${thread.line ?? 0}@${sig}`;
 }
 
+function checkCacheKey(ctx, check, input) {
+  if (!ctx) return null;
+  const sig = shortHash(`${check.name}|${input}`);
+  return `check:${ctx.owner}/${ctx.repo}#${ctx.number}:${check.name}@${sig}`;
+}
+
 function relativeAge(at) {
   const sec = Math.max(0, Math.floor((Date.now() - at) / 1000));
   if (sec < 60) return 'たった今';
@@ -1476,7 +1482,8 @@ function renderSummaryInto(host, kind, { summary, cli, at }) {
   const label = document.createElement('div');
   label.className = 'detail-ai-summary-label';
   const main = document.createElement('span');
-  main.textContent = `${kind === 'pr' ? 'PR Summary' : 'Summary'} (${cli || 'AI'})`;
+  const kindLabel = kind === 'pr' ? 'PR Summary' : kind === 'check' ? 'Check Analysis' : 'Summary';
+  main.textContent = `${kindLabel} (${cli || 'AI'})`;
   label.appendChild(main);
   if (at) {
     const cacheTag = document.createElement('span');
@@ -1504,10 +1511,17 @@ function renderSummaryInto(host, kind, { summary, cli, at }) {
   host.appendChild(summaryEl);
 }
 
-async function runSummarize(card, btn, text, cacheKey) {
+// Thread comments → AI summary. Background-task: caller can close the
+// pane and the request still completes (header indicator + native
+// notification announce it). On reopen, the cached summary surfaces and
+// the button reads "再要約".
+function runSummarize(card, btn, text, cacheKey) {
+  if (!cacheKey) return;
+  const ctx = paneContext();
+  const label = ctx ? `${ctx.owner}/${ctx.repo}#${ctx.number} thread summary` : 'thread summary';
+
   const existing = card.querySelector('.detail-ai-summary');
   if (existing) existing.remove();
-
   const summaryEl = document.createElement('div');
   summaryEl.className = 'detail-ai-summary loading';
   summaryEl.textContent = 'AI で要約中...';
@@ -1515,58 +1529,80 @@ async function runSummarize(card, btn, text, cacheKey) {
   btn.disabled = true;
   btn.textContent = '要約中...';
 
-  try {
-    const { summary, cli } = await api.aiSummarize(text);
-    summaryEl.remove();
-    renderSummaryInto(card, 'thread', { summary, cli, at: null });
-    if (cacheKey) writeAiSummary(cacheKey, summary, cli);
-    btn.textContent = '再要約';
-  } catch (err) {
-    summaryEl.classList.remove('loading');
-    summaryEl.classList.add('error');
-    summaryEl.textContent = err.message;
-    btn.textContent = 'AIで要約';
-  } finally {
-    btn.disabled = false;
-  }
+  startAiAnalysis({
+    key: cacheKey,
+    label,
+    run: () => api.aiSummarize(text),
+    onComplete: ({ summary, cli }) => {
+      if (document.contains(card)) {
+        summaryEl.remove();
+        renderSummaryInto(card, 'thread', { summary, cli, at: null });
+        btn.textContent = '再要約';
+        btn.disabled = false;
+      }
+    },
+    onError: (err) => {
+      if (document.contains(summaryEl)) {
+        summaryEl.classList.remove('loading');
+        summaryEl.classList.add('error');
+        summaryEl.textContent = err.message;
+        btn.textContent = 'AIで要約';
+        btn.disabled = false;
+      }
+    },
+  });
 }
 
-async function runPRSummarize(host, btn, detail) {
+// PR-as-a-whole → AI summary. Same background-task pattern as
+// runSummarize, but hits the PR-specific endpoint that adds file list
+// context to the prompt.
+function runPRSummarize(host, btn, detail) {
+  const ctx = paneContext();
+  const cacheKey = prCacheKey(ctx, detail);
+  if (!cacheKey) return;
+  const label = `${ctx.owner}/${ctx.repo}#${ctx.number} PR summary`;
+  const originalLabel = btn.textContent;
+
   const existing = host.querySelector('.detail-ai-summary');
   if (existing) existing.remove();
-
   const summaryEl = document.createElement('div');
   summaryEl.className = 'detail-ai-summary loading';
   summaryEl.textContent = 'AI で PR を要約中...';
   host.appendChild(summaryEl);
   btn.disabled = true;
-  const originalLabel = btn.textContent;
   btn.textContent = '要約中...';
 
-  try {
-    const files = (detail.files || []).map((f) => ({
-      filename: f.filename,
-      additions: f.additions || 0,
-      deletions: f.deletions || 0,
-    }));
-    const { summary, cli } = await api.aiSummarizePR({
-      title: detail.title || '',
-      body: detail.body || '',
-      files,
-    });
-    summaryEl.remove();
-    renderSummaryInto(host, 'pr', { summary, cli, at: null });
-    const ctx = paneContext();
-    const key = prCacheKey(ctx, detail);
-    if (key) writeAiSummary(key, summary, cli);
-    btn.textContent = '再要約';
-  } catch (err) {
-    summaryEl.remove();
-    showToast(`PR要約に失敗: ${err.message}`, 'error');
-    btn.textContent = originalLabel;
-  } finally {
-    btn.disabled = false;
-  }
+  const files = (detail.files || []).map((f) => ({
+    filename: f.filename,
+    additions: f.additions || 0,
+    deletions: f.deletions || 0,
+  }));
+
+  startAiAnalysis({
+    key: cacheKey,
+    label,
+    run: () =>
+      api.aiSummarizePR({
+        title: detail.title || '',
+        body: detail.body || '',
+        files,
+      }),
+    onComplete: ({ summary, cli }) => {
+      if (document.contains(host)) {
+        summaryEl.remove();
+        renderSummaryInto(host, 'pr', { summary, cli, at: null });
+        btn.textContent = '再要約';
+        btn.disabled = false;
+      }
+    },
+    onError: () => {
+      if (document.contains(summaryEl)) {
+        summaryEl.remove();
+        btn.textContent = originalLabel;
+        btn.disabled = false;
+      }
+    },
+  });
 }
 
 function closeDetailPane() {
@@ -1622,18 +1658,30 @@ function renderFailedChecks(container, detail) {
   container.appendChild(list);
 }
 
-// One failed check row + on-demand expand. Annotations are the primary
-// "what went wrong" payload; if GitHub didn't emit any, fall back to the
-// CheckRun summary; otherwise to StatusContext.description; otherwise a
-// "no detail available" notice with a link to the run.
+// Pick the most useful "why did this fail?" payload from a check, in
+// priority order: annotations (file:line precision) → summary (CheckRun
+// markdown) → description (StatusContext blurb). Returns null when none
+// of those are present so callers can collapse the row to "just a link".
+function pickCheckDetail(c) {
+  if (c.annotations && c.annotations.length > 0) {
+    return { kind: 'annotations', annotations: c.annotations };
+  }
+  const summary = c.summary && c.summary.trim();
+  if (summary) return { kind: 'summary', text: summary };
+  const description = c.description && c.description.trim();
+  if (description) return { kind: 'description', text: description };
+  return null;
+}
+
+// One failed check row + on-demand expand. detail (annotations / summary /
+// description) drives whether the row is a button (expandable) or a plain
+// link to the run page.
 function renderFailedCheckEntry(c) {
   const wrapper = document.createElement('div');
   wrapper.className = 'detail-check-entry';
 
-  const hasDetail =
-    (c.annotations && c.annotations.length > 0) ||
-    (c.summary && c.summary.trim()) ||
-    (c.description && c.description.trim());
+  const detail = pickCheckDetail(c);
+  const hasDetail = detail !== null;
 
   // Header row: clickable to expand when there's detail to show, plain
   // link to the Actions/CI page when there isn't.
@@ -1699,7 +1747,7 @@ function renderFailedCheckEntry(c) {
     head.setAttribute('aria-expanded', 'true');
     head.querySelector('.detail-check-caret').textContent = '▾';
     if (!body) {
-      body = renderCheckBody(c);
+      body = renderCheckBody(c, detail);
       wrapper.appendChild(body);
     } else {
       body.style.display = '';
@@ -1709,14 +1757,14 @@ function renderFailedCheckEntry(c) {
   return wrapper;
 }
 
-function renderCheckBody(c) {
+function renderCheckBody(c, detail) {
   const body = document.createElement('div');
   body.className = 'detail-check-body';
 
-  if (c.annotations && c.annotations.length > 0) {
+  if (detail?.kind === 'annotations') {
     const list = document.createElement('div');
     list.className = 'detail-check-annotations';
-    for (const a of c.annotations) {
+    for (const a of detail.annotations) {
       const row = document.createElement('div');
       row.className = `detail-check-annotation ${a.level === 'WARNING' ? 'warn' : 'fail'}`;
       const loc = document.createElement('span');
@@ -1736,15 +1784,10 @@ function renderCheckBody(c) {
       list.appendChild(row);
     }
     body.appendChild(list);
-  } else if (c.summary && c.summary.trim()) {
+  } else if (detail?.kind === 'summary' || detail?.kind === 'description') {
     const sum = document.createElement('pre');
     sum.className = 'detail-check-summary';
-    sum.textContent = c.summary;
-    body.appendChild(sum);
-  } else if (c.description && c.description.trim()) {
-    const sum = document.createElement('pre');
-    sum.className = 'detail-check-summary';
-    sum.textContent = c.description;
+    sum.textContent = detail.text;
     body.appendChild(sum);
   }
 
@@ -1759,43 +1802,36 @@ function renderCheckBody(c) {
     body.appendChild(link);
   }
 
-  // AI analysis button — only when AI server is up AND we have something to
-  // feed it (annotations or summary). Text is composed locally so the prompt
-  // is well-scoped: "this is a failed CI check, here's what GitHub reported".
-  const analysisInput = composeCheckAnalysisInput(c);
-  if (isAiAvailable() && analysisInput) {
+  // AI analysis button — only when AI server is up AND there's something to
+  // feed it. Prompt is composed locally so it's well-scoped: "this is a
+  // failed CI check, here's what GitHub reported".
+  const analysisInput = composeCheckAnalysisInput(c, detail);
+  const ctx = paneContext();
+  const cacheKey = checkCacheKey(ctx, c, analysisInput || '');
+  if (isAiAvailable() && analysisInput && cacheKey) {
     const aiBtn = document.createElement('button');
     aiBtn.className = 'detail-check-ai-btn';
     aiBtn.type = 'button';
     aiBtn.textContent = 'AI で原因分析';
 
-    const ctx = paneContext();
-    const cacheKey = ctx
-      ? `check:${ctx.owner}/${ctx.repo}#${ctx.number}:${shortHash(c.name + analysisInput)}`
-      : null;
-    const label = ctx ? `${ctx.owner}/${ctx.repo}#${ctx.number} ${c.name}` : c.name;
+    const label = `${ctx.owner}/${ctx.repo}#${ctx.number} ${c.name}`;
 
-    // Reflect the global in-flight state on the button so the user knows
-    // the click went through even if they later close + reopen the pane.
-    if (cacheKey && aiTasksInProgress.has(cacheKey)) {
+    if (aiTasksInProgress.has(cacheKey)) {
       aiBtn.textContent = '分析中…';
       aiBtn.disabled = true;
     }
 
     aiBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      if (!cacheKey) return;
       aiBtn.textContent = '分析中…';
       aiBtn.disabled = true;
       startAiAnalysis({
         key: cacheKey,
         label,
-        input: analysisInput,
+        run: () => api.aiSummarize(analysisInput),
         onComplete: ({ summary, cli }) => {
-          // Only paint into this pane if it's still in the DOM; the
-          // localStorage cache is the source of truth on reopen.
           if (document.contains(body)) {
-            renderSummaryInto(body, 'thread', { summary, cli, at: null });
+            renderSummaryInto(body, 'check', { summary, cli, at: null });
             aiBtn.textContent = '再要約';
             aiBtn.disabled = false;
           }
@@ -1810,11 +1846,9 @@ function renderCheckBody(c) {
     });
     body.appendChild(aiBtn);
 
-    // Pre-populate cached AI summary if available so the user sees prior
-    // analysis on reopen without re-spending CLI time.
-    const cached = cacheKey ? readAiSummary(cacheKey) : null;
+    const cached = readAiSummary(cacheKey);
     if (cached) {
-      renderSummaryInto(body, 'thread', cached);
+      renderSummaryInto(body, 'check', cached);
       aiBtn.textContent = '再要約';
     }
   }
@@ -1822,26 +1856,20 @@ function renderCheckBody(c) {
   return body;
 }
 
-function composeCheckAnalysisInput(c) {
-  const parts = [];
-  parts.push(`Failed CI check: ${c.name}`);
-  parts.push(`Conclusion: ${c.conclusion}`);
-  if (c.annotations && c.annotations.length > 0) {
+function composeCheckAnalysisInput(c, detail) {
+  if (!detail) return null;
+  const parts = [`Failed CI check: ${c.name}`, `Conclusion: ${c.conclusion}`];
+  if (detail.kind === 'annotations') {
     parts.push('\nAnnotations:');
-    for (const a of c.annotations) {
+    for (const a of detail.annotations) {
       const loc = a.path ? (a.startLine ? `${a.path}:${a.startLine}` : a.path) : '(no path)';
       parts.push(`- [${a.level || 'FAILURE'}] ${loc}`);
       if (a.title) parts.push(`  title: ${a.title}`);
       if (a.message) parts.push(`  message: ${a.message}`);
     }
-  } else if (c.summary && c.summary.trim()) {
-    parts.push('\nSummary:');
-    parts.push(c.summary.trim());
-  } else if (c.description && c.description.trim()) {
-    parts.push('\nDescription:');
-    parts.push(c.description.trim());
   } else {
-    return null;
+    parts.push(`\n${detail.kind === 'summary' ? 'Summary' : 'Description'}:`);
+    parts.push(detail.text);
   }
   return parts.join('\n');
 }
@@ -1865,29 +1893,33 @@ function updateAiTaskIndicator() {
   if (countEl) countEl.textContent = String(count);
 }
 
-// Fire-and-forget AI analysis. The pane can close, the user can navigate
-// away, and the request still resolves: result lands in localStorage cache,
-// header indicator decrements, a native notification + toast announce
-// completion. Repeated clicks while one is in-flight are deduped.
-function startAiAnalysis({ key, label, input, onComplete, onError }) {
-  if (!key || !input) return;
+// Fire-and-forget AI request. Pane can close, navigation can change —
+// the request still resolves: result lands in localStorage cache, header
+// indicator decrements, native notification + toast announce completion.
+// Repeated clicks while one is in-flight are deduped via the cache key.
+//
+// `run` returns a Promise<{ summary, cli }>; callers swap in
+// api.aiSummarize / api.aiSummarizePR / future endpoints without this
+// helper needing to know which.
+function startAiAnalysis({ key, label, run, onComplete, onError }) {
+  if (!key || typeof run !== 'function') return;
   if (aiTasksInProgress.has(key)) {
-    showToast(`既に分析中: ${label}`, 'success');
+    showToast(`既に分析中: ${label}`, 'info');
     return;
   }
   aiTasksInProgress.set(key, { label, startedAt: Date.now() });
   updateAiTaskIndicator();
 
-  api
-    .aiSummarize(input)
+  Promise.resolve()
+    .then(() => run())
     .then(({ summary, cli }) => {
       writeAiSummary(key, summary, cli);
-      sendNotification('AI 分析完了', label);
-      showToast(`AI 分析完了: ${label}`, 'success');
+      sendNotification('AI 要約完了', label);
+      showToast(`AI 要約完了: ${label}`, 'success');
       if (typeof onComplete === 'function') onComplete({ summary, cli });
     })
     .catch((err) => {
-      showToast(`AI 分析失敗 (${label}): ${err.message}`, 'error');
+      showToast(`AI 要約失敗 (${label}): ${err.message}`, 'error');
       if (typeof onError === 'function') onError(err);
     })
     .finally(() => {
@@ -1998,7 +2030,13 @@ function loadLang(lang) {
     script.src = url;
     script.async = true;
     script.onload = () => resolve(isLangLoaded(lang));
-    script.onerror = () => resolve(false);
+    // Drop the rejected promise so a later expand can retry. Without
+    // this delete the user has to reload the page after a transient
+    // network blip.
+    script.onerror = () => {
+      langLoadPromises.delete(lang);
+      resolve(false);
+    };
     document.head.appendChild(script);
   });
   langLoadPromises.set(lang, p);
