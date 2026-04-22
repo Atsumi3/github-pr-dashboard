@@ -410,11 +410,11 @@ function renderPRCard(pr) {
   const num = document.createElement('span');
   num.className = 'pr-number';
   num.textContent = `#${pr.number}`;
-  const title = document.createElement('a');
+  // Title is intentionally not a hyperlink — clicking it should open the
+  // in-app detail pane (which has its own "Open in GitHub" button), not
+  // bounce the user out to github.com.
+  const title = document.createElement('span');
   title.className = 'pr-title';
-  title.href = pr.url;
-  title.target = '_blank';
-  title.rel = 'noopener';
   title.textContent = pr.title;
   // Stash the original so highlightTitle can restore / re-mark without
   // accumulating <mark> wrappers across successive search keystrokes.
