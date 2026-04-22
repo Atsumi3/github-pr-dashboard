@@ -1166,6 +1166,36 @@ body {
   font-weight: 700;
   letter-spacing: -0.2px;
   color: var(--text-primary);
+  flex: 1;
+  min-width: 0;
+}
+
+.repo-refresh-btn {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all var(--transition);
+  flex-shrink: 0;
+}
+.repo-refresh-btn:hover {
+  background: var(--bg-hover);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.repo-refresh-btn.loading {
+  pointer-events: none;
+  color: var(--accent);
+}
+.repo-refresh-btn.loading svg {
+  animation: spin 0.7s linear infinite;
 }
 
 .repo-updated {

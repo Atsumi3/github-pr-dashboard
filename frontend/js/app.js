@@ -606,6 +606,39 @@ function renderRepoSection(repoData) {
     section.classList.add('repo-paused');
   }
 
+  // Per-repo refresh — useful when one repo just hit a transient 5xx and
+  // the user doesn't want to wait for the next poll or hit global refresh.
+  const refreshBtn = document.createElement('button');
+  refreshBtn.type = 'button';
+  refreshBtn.className = 'repo-refresh-btn';
+  refreshBtn.title = `${repoData.repo} を再取得`;
+  refreshBtn.setAttribute('aria-label', `Refresh ${repoData.repo}`);
+  const svgNs = 'http://www.w3.org/2000/svg';
+  const refreshSvg = document.createElementNS(svgNs, 'svg');
+  refreshSvg.setAttribute('viewBox', '0 0 16 16');
+  refreshSvg.setAttribute('width', '12');
+  refreshSvg.setAttribute('height', '12');
+  refreshSvg.setAttribute('fill', 'currentColor');
+  refreshSvg.setAttribute('aria-hidden', 'true');
+  const refreshPath = document.createElementNS(svgNs, 'path');
+  refreshPath.setAttribute(
+    'd',
+    'M8 2.5a5.5 5.5 0 1 0 5.45 6.27.75.75 0 0 1 1.49.21A7 7 0 1 1 13 3.94V2.75a.75.75 0 0 1 1.5 0v3.5a.75.75 0 0 1-.75.75h-3.5a.75.75 0 0 1 0-1.5h1.93A5.49 5.49 0 0 0 8 2.5z',
+  );
+  refreshSvg.appendChild(refreshPath);
+  refreshBtn.appendChild(refreshSvg);
+  refreshBtn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    if (refreshBtn.classList.contains('loading')) return;
+    refreshBtn.classList.add('loading');
+    try {
+      await loadSingleRepo(repoData.repo);
+    } finally {
+      refreshBtn.classList.remove('loading');
+    }
+  });
+  header.appendChild(refreshBtn);
+
   section.appendChild(header);
 
   if (repoData.prs.length === 0) {
