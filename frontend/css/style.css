@@ -1343,29 +1343,17 @@ body {
   border-left: 3px solid var(--accent);
   border-radius: var(--radius-md);
   padding: var(--space-5) var(--space-6);
-  /* Subtle stagger on first paint. Other state changes use the wider
-     `transition: all` below so hover / status flips still feel snappy. */
-  animation: pr-card-in 240ms ease-out backwards;
-  animation-delay: calc(var(--stagger, 0) * 22ms);
+  /* Hover/transform/shadow only — no fade-in or color transition.
+     reconcileRepoSections fully replaces sections when their signature
+     changes, so any animation here would re-fire on every poll where a
+     PR's updatedAt or label changed, which felt noisy. */
   transition:
-    background-color 320ms ease,
-    border-color 320ms ease,
     transform var(--transition),
     box-shadow var(--transition);
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
   position: relative;
-}
-@keyframes pr-card-in {
-  from {
-    opacity: 0;
-    transform: translateY(4px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
 }
 .pr-card:hover {
   border-color: var(--border-hover);

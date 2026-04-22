@@ -226,14 +226,7 @@ const displayLimit = new Map();
 
 function renderCardsInGrid(grid, sortedPrs, limit) {
   while (grid.firstChild) grid.firstChild.remove();
-  sortedPrs.slice(0, limit).forEach((pr, idx) => {
-    const card = renderPRCard(pr);
-    // Cap stagger index at 11 so very-late cards don't introduce a long
-    // perceived delay. CSS uses --stagger via animation-delay (or no-op
-    // when prefers-reduced-motion is on).
-    card.style.setProperty('--stagger', String(Math.min(idx, 11)));
-    grid.appendChild(card);
-  });
+  sortedPrs.slice(0, limit).forEach((pr) => grid.appendChild(renderPRCard(pr)));
 }
 
 function getSortKey() {
