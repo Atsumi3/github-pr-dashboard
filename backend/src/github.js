@@ -68,10 +68,23 @@ export async function listUserRepos(token, query) {
 //   - latestOpinionatedReviews: per-user latest APPROVED / CHANGES_REQUESTED / DISMISSED state
 //   - commits.last(1).statusCheckRollup: combined CI rollup state for the head commit
 //   - mergeable / mergeStateStatus: used to decide if behind/ahead REST fallback is needed
+// We deliberately keep the per-PR sub-collections small. GitHub's GraphQL
+// node-cost is roughly outer × Σ(inner first:N), so trimming each connection
+// has multiplicative payoff (~1/3 of the previous request size for a typical
+// repo). 10 PRs is enough for the dashboard's per-repo display since we only
+// surface the most recently-updated work; users who want more can open the
+// repo on github.com directly.
+//
+// NOTE: This GraphQL endpoint cannot filter by assignee/reviewer — the
+// `assignee=me` query parameter the frontend sends only controls a backend
+// post-fetch filter (isRelatedToMe). True server-side filtering would need
+// the GitHub search API (`is:pr is:open assignee:me`), which is a different
+// architecture (single search across all watched repos rather than per-repo
+// fetch-then-filter).
 const OPEN_PRS_QUERY = `
   query($owner: String!, $name: String!) {
     repository(owner: $owner, name: $name) {
-      pullRequests(states: OPEN, first: 50, orderBy: {field: UPDATED_AT, direction: DESC}) {
+      pullRequests(states: OPEN, first: 10, orderBy: {field: UPDATED_AT, direction: DESC}) {
         nodes {
           number
           title
@@ -90,10 +103,10 @@ const OPEN_PRS_QUERY = `
             login
             avatarUrl
           }
-          assignees(first: 5) {
+          assignees(first: 3) {
             nodes { login avatarUrl }
           }
-          reviewRequests(first: 5) {
+          reviewRequests(first: 3) {
             nodes {
               requestedReviewer {
                 __typename
@@ -101,7 +114,7 @@ const OPEN_PRS_QUERY = `
               }
             }
           }
-          latestOpinionatedReviews(first: 20, writersOnly: false) {
+          latestOpinionatedReviews(first: 10, writersOnly: false) {
             nodes {
               state
               author { login avatarUrl }
@@ -114,7 +127,65 @@ const OPEN_PRS_QUERY = `
               }
             }
           }
-          labels(first: 10) {
+          labels(first: 6) {
+            nodes { name color }
+          }
+        }
+      }
+    }
+  }
+`;
+
+// GraphQL search variant — reuses the same PR field set as OPEN_PRS_QUERY,
+// but selects PullRequest nodes that match a server-side search query
+// (`is:pr is:open involves:USER repo:... repo:...`). This is the only way
+// to get true server-side "my PRs" filtering; the pullRequests connection
+// doesn't accept assignee/reviewer filters.
+const SEARCH_PRS_QUERY = `
+  query($q: String!) {
+    search(query: $q, type: ISSUE, first: 50) {
+      nodes {
+        ... on PullRequest {
+          number
+          title
+          url
+          isDraft
+          state
+          headRefName
+          baseRefName
+          additions
+          deletions
+          mergeable
+          mergeStateStatus
+          createdAt
+          updatedAt
+          repository { nameWithOwner }
+          author { login avatarUrl }
+          assignees(first: 3) {
+            nodes { login avatarUrl }
+          }
+          reviewRequests(first: 3) {
+            nodes {
+              requestedReviewer {
+                __typename
+                ... on User { login avatarUrl }
+              }
+            }
+          }
+          latestOpinionatedReviews(first: 10, writersOnly: false) {
+            nodes {
+              state
+              author { login avatarUrl }
+            }
+          }
+          commits(last: 1) {
+            nodes {
+              commit {
+                statusCheckRollup { state }
+              }
+            }
+          }
+          labels(first: 6) {
             nodes { name color }
           }
         }
@@ -165,6 +236,85 @@ async function gqlWithRetry(token, query, variables, repoFullName, attempts = 3)
   throw lastErr;
 }
 
+// PRs flagged BEHIND / DIRTY / BLOCKED by mergeStateStatus need an exact
+// integer behind/ahead count. Everything else is treated as 0 so we don't
+// hammer REST /compare unnecessarily.
+const NEEDS_COMPARE = new Set(['BEHIND', 'DIRTY', 'BLOCKED']);
+
+// Map one GraphQL PullRequest node to the shape the frontend expects.
+// Kept separate so both per-repo (OPEN_PRS_QUERY) and cross-repo search paths
+// produce identical PR objects.
+function mapPrNode(pr) {
+  const reviews = (pr.latestOpinionatedReviews?.nodes || [])
+    .filter((r) => r.author && r.state)
+    .map((r) => ({
+      login: r.author.login,
+      state: r.state,
+      avatarUrl: r.author.avatarUrl,
+    }));
+
+  const requestedReviewers = (pr.reviewRequests?.nodes || [])
+    .map((rr) => rr.requestedReviewer)
+    .filter((u) => u && u.__typename === 'User')
+    .map((u) => ({ login: u.login, avatarUrl: u.avatarUrl }));
+
+  const reviewStatus = deriveReviewStatus(
+    reviews.map((r) => ({ user: { login: r.login }, state: r.state })),
+    requestedReviewers,
+  );
+
+  const rollupState = pr.commits?.nodes?.[0]?.commit?.statusCheckRollup?.state || null;
+  const ciStatus = rollupState ? { state: mapRollupState(rollupState), total: null } : null;
+
+  const mergeable = mapMergeable(pr.mergeable);
+  const mergeableState = pr.mergeStateStatus ? pr.mergeStateStatus.toLowerCase() : null;
+
+  const labels = (pr.labels?.nodes || [])
+    .filter((l) => l && l.name)
+    .map((l) => ({ name: l.name, color: normalizeLabelColor(l.color) }));
+
+  return {
+    number: pr.number,
+    title: pr.title,
+    url: pr.url,
+    draft: pr.isDraft || false,
+    labels,
+    state: pr.state ? pr.state.toLowerCase() : 'open',
+    author: pr.author
+      ? { login: pr.author.login, avatarUrl: pr.author.avatarUrl }
+      : { login: 'ghost', avatarUrl: '' },
+    branch: pr.headRefName,
+    baseBranch: pr.baseRefName,
+    assignees: (pr.assignees?.nodes || []).map((a) => ({ login: a.login, avatarUrl: a.avatarUrl })),
+    requestedReviewers,
+    reviewStatus,
+    reviews,
+    ciStatus,
+    mergeable,
+    mergeableState,
+    behindBy: NEEDS_COMPARE.has(pr.mergeStateStatus) ? null : 0,
+    aheadBy: null,
+    createdAt: pr.createdAt,
+    updatedAt: pr.updatedAt,
+    _needsCompare: NEEDS_COMPARE.has(pr.mergeStateStatus),
+    _baseRef: pr.baseRefName,
+    _headRef: pr.headRefName,
+  };
+}
+
+async function resolveCompares(token, prs, repoFullNameResolver) {
+  const need = prs.filter((p) => p._needsCompare);
+  await Promise.all(
+    need.map(async (p) => {
+      const repoFullName = repoFullNameResolver(p);
+      const cmp = await fetchCompare(token, repoFullName, p._baseRef, p._headRef);
+      p.behindBy = cmp?.behindBy ?? null;
+      p.aheadBy = cmp?.aheadBy ?? null;
+    }),
+  );
+  return prs.map(({ _needsCompare, _baseRef, _headRef, ...rest }) => rest);
+}
+
 export async function fetchOpenPRs(token, repoFullName) {
   const [owner, name] = repoFullName.split('/');
   if (!owner || !name) {
@@ -173,92 +323,74 @@ export async function fetchOpenPRs(token, repoFullName) {
 
   const json = await gqlWithRetry(token, OPEN_PRS_QUERY, { owner, name }, repoFullName);
   const nodes = json.data?.repository?.pullRequests?.nodes || [];
+  const mapped = nodes.map(mapPrNode);
+  return resolveCompares(token, mapped, () => repoFullName);
+}
 
-  // Map GraphQL PR nodes to the legacy REST-shaped response the frontend expects.
-  // For behind/ahead we need an integer count which GraphQL does not expose; we fall
-  // back to the REST /compare endpoint only for PRs that are likely behind, i.e.
-  // mergeStateStatus === 'BEHIND' or 'DIRTY'/'BLOCKED' where staleness is plausible.
-  // PRs that are CLEAN/UNSTABLE/HAS_HOOKS/UNKNOWN with mergeable === MERGEABLE are
-  // treated as behindBy: 0 to avoid making 100 REST calls and defeating the purpose.
-  const NEEDS_COMPARE = new Set(['BEHIND', 'DIRTY', 'BLOCKED']);
+// GitHub search queries are roughly 256 chars effectively; 5 repos per chunk
+// × ~30 chars each ≈ 150 chars, safe with room for qualifiers.
+const SEARCH_CHUNK_SIZE = 5;
 
-  const mapped = nodes.map((pr) => {
-    const reviews = (pr.latestOpinionatedReviews?.nodes || [])
-      .filter((r) => r.author && r.state)
-      .map((r) => ({
-        login: r.author.login,
-        state: r.state,
-        avatarUrl: r.author.avatarUrl,
-      }));
+// Cross-repo, server-side-filtered fetch of PRs "relevant to me".
+// Two queries per chunk (GitHub search AND-joins qualifiers; there's no OR
+// syntax for separate user qualifiers), deduped and grouped by repository.
+//
+// Returns [{ repo, prs, error }] for every watched repo, with empty `prs`
+// for repos where the user has no involvement. That shape matches what
+// fetchAllPRs previously produced per-repo so the downstream cache/
+// buildResponse don't need to know which path ran.
+export async function searchOpenPRsForMe(token, repoFullNames, me) {
+  if (!me || !Array.isArray(repoFullNames) || repoFullNames.length === 0) {
+    return repoFullNames.map((id) => ({ repo: id, prs: [], error: null }));
+  }
 
-    const requestedReviewers = (pr.reviewRequests?.nodes || [])
-      .map((rr) => rr.requestedReviewer)
-      .filter((u) => u && u.__typename === 'User')
-      .map((u) => ({ login: u.login, avatarUrl: u.avatarUrl }));
+  const chunks = [];
+  for (let i = 0; i < repoFullNames.length; i += SEARCH_CHUNK_SIZE) {
+    chunks.push(repoFullNames.slice(i, i + SEARCH_CHUNK_SIZE));
+  }
 
-    const reviewStatus = deriveReviewStatus(
-      // deriveReviewStatus expects REST-style review objects: { user: { login }, state }
-      reviews.map((r) => ({ user: { login: r.login }, state: r.state })),
-      requestedReviewers,
-    );
+  // For each chunk, run both queries in parallel. `involves` covers
+  // assignee/author/mentions/commenter; `review-requested` covers reviewers
+  // who haven't interacted yet — combined this matches the old
+  // isRelatedToMe positive cases (minus the broad "any REVIEW_REQUIRED PR"
+  // catch-all, which the user explicitly wanted dropped).
+  async function searchChunk(chunkRepos, qualifier) {
+    const repoFilter = chunkRepos.map((id) => `repo:${id}`).join(' ');
+    const q = `is:pr is:open ${qualifier}:${me} ${repoFilter}`;
+    const json = await gqlWithRetry(token, SEARCH_PRS_QUERY, { q }, q);
+    return (json.data?.search?.nodes || []).filter((n) => n && n.number);
+  }
 
-    const rollupState = pr.commits?.nodes?.[0]?.commit?.statusCheckRollup?.state || null;
-    const ciStatus = rollupState ? { state: mapRollupState(rollupState), total: null } : null;
+  const rawNodes = (
+    await Promise.all(
+      chunks.flatMap((chunk) => [
+        searchChunk(chunk, 'involves'),
+        searchChunk(chunk, 'review-requested'),
+      ]),
+    )
+  ).flat();
 
-    // Translate GraphQL enums into the lower-cased values the REST API returned.
-    const mergeable = mapMergeable(pr.mergeable);
-    const mergeableState = pr.mergeStateStatus ? pr.mergeStateStatus.toLowerCase() : null;
+  // Dedupe by url (same PR can appear in both queries) and group by repo.
+  const byUrl = new Map();
+  for (const node of rawNodes) byUrl.set(node.url, node);
 
-    const labels = (pr.labels?.nodes || [])
-      .filter((l) => l && l.name)
-      .map((l) => ({ name: l.name, color: normalizeLabelColor(l.color) }));
-
-    return {
-      number: pr.number,
-      title: pr.title,
-      url: pr.url,
-      draft: pr.isDraft || false,
-      labels,
-      state: pr.state ? pr.state.toLowerCase() : 'open',
-      author: pr.author
-        ? { login: pr.author.login, avatarUrl: pr.author.avatarUrl }
-        : { login: 'ghost', avatarUrl: '' },
-      branch: pr.headRefName,
-      baseBranch: pr.baseRefName,
-      assignees: (pr.assignees?.nodes || []).map((a) => ({
-        login: a.login,
-        avatarUrl: a.avatarUrl,
-      })),
-      requestedReviewers,
-      reviewStatus,
-      reviews,
-      ciStatus,
-      mergeable,
-      mergeableState,
-      behindBy: NEEDS_COMPARE.has(pr.mergeStateStatus) ? null : 0,
-      aheadBy: null,
-      createdAt: pr.createdAt,
-      updatedAt: pr.updatedAt,
-      _needsCompare: NEEDS_COMPARE.has(pr.mergeStateStatus),
-      _baseRef: pr.baseRefName,
-      _headRef: pr.headRefName,
-    };
+  const mapped = Array.from(byUrl.values()).map((node) => {
+    const pr = mapPrNode(node);
+    pr._repoFullName = node.repository?.nameWithOwner || '';
+    return pr;
   });
 
-  // Selective REST fallback: only the PRs that GraphQL flagged as potentially behind
-  // need an exact behind/ahead count. This keeps total requests at 1 (GraphQL) + N
-  // (only the BEHIND/DIRTY/BLOCKED subset) instead of 1 + 4 * total.
-  const needCompare = mapped.filter((p) => p._needsCompare);
-  await Promise.all(
-    needCompare.map(async (p) => {
-      const cmp = await fetchCompare(token, repoFullName, p._baseRef, p._headRef);
-      p.behindBy = cmp?.behindBy ?? null;
-      p.aheadBy = cmp?.aheadBy ?? null;
-    }),
-  );
+  const resolved = await resolveCompares(token, mapped, (p) => p._repoFullName);
 
-  // Strip internal helper fields before returning.
-  return mapped.map(({ _needsCompare, _baseRef, _headRef, ...rest }) => rest);
+  const byRepo = new Map();
+  for (const id of repoFullNames) byRepo.set(id, []);
+  for (const pr of resolved) {
+    const repoId = pr._repoFullName;
+    delete pr._repoFullName;
+    if (byRepo.has(repoId)) byRepo.get(repoId).push(pr);
+  }
+
+  return Array.from(byRepo, ([repo, prs]) => ({ repo, prs, error: null }));
 }
 
 function mapRollupState(state) {
@@ -421,15 +553,126 @@ async function fetchUnresolvedThreads(token, owner, repo, number) {
   }
 }
 
+// GraphQL exposes the head commit's full check matrix in one round-trip,
+// which is cheaper than the REST equivalent (`/commits/:sha/check-runs`
+// plus `/commits/:sha/statuses`). We surface only failed/cancelled/timed-out
+// entries to the UI so reviewers immediately see what's blocking merge.
+const PR_CHECKS_QUERY = `
+  query($owner: String!, $name: String!, $number: Int!) {
+    repository(owner: $owner, name: $name) {
+      pullRequest(number: $number) {
+        commits(last: 1) {
+          nodes {
+            commit {
+              oid
+              statusCheckRollup {
+                state
+                contexts(first: 100) {
+                  nodes {
+                    __typename
+                    ... on CheckRun {
+                      name
+                      status
+                      conclusion
+                      detailsUrl
+                      startedAt
+                      completedAt
+                      checkSuite {
+                        workflowRun {
+                          workflow { name }
+                        }
+                      }
+                    }
+                    ... on StatusContext {
+                      context
+                      description
+                      state
+                      targetUrl
+                      createdAt
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
+// Backend filters down to failures-only before sending so we don't ship a
+// 100-context check matrix to the browser on every detail-pane open. The
+// frontend's FAILED_CHECK_LABELS map is a label-only concern (for UI text)
+// and intentionally does NOT re-filter — the contract is "what backend sends
+// is what UI shows". If GitHub adds a new failing conclusion, update this
+// Set; the UI will fall back to the raw conclusion string.
+const FAILED_CHECK_RUN_CONCLUSIONS = new Set([
+  'FAILURE',
+  'TIMED_OUT',
+  'CANCELLED',
+  'ACTION_REQUIRED',
+  'STARTUP_FAILURE',
+]);
+const FAILED_STATUS_STATES = new Set(['FAILURE', 'ERROR']);
+
+async function fetchPRChecks(token, owner, repo, number) {
+  try {
+    const json = await gqlWithRetry(
+      token,
+      PR_CHECKS_QUERY,
+      { owner, name: repo, number },
+      `${owner}/${repo}#${number}`,
+    );
+    const commit = json.data?.repository?.pullRequest?.commits?.nodes?.[0]?.commit;
+    const rollup = commit?.statusCheckRollup;
+    if (!rollup) return { rollupState: null, failed: [], error: null };
+    const contexts = rollup.contexts?.nodes || [];
+    const failed = contexts
+      .map((ctx) => {
+        if (ctx.__typename === 'CheckRun') {
+          if (!FAILED_CHECK_RUN_CONCLUSIONS.has(ctx.conclusion)) return null;
+          return {
+            kind: 'check',
+            name: ctx.checkSuite?.workflowRun?.workflow?.name
+              ? `${ctx.checkSuite.workflowRun.workflow.name} / ${ctx.name}`
+              : ctx.name,
+            conclusion: ctx.conclusion,
+            url: ctx.detailsUrl || null,
+            completedAt: ctx.completedAt || null,
+          };
+        }
+        if (ctx.__typename === 'StatusContext') {
+          if (!FAILED_STATUS_STATES.has(ctx.state)) return null;
+          return {
+            kind: 'status',
+            name: ctx.context,
+            conclusion: ctx.state,
+            url: ctx.targetUrl || null,
+            description: ctx.description || null,
+            completedAt: ctx.createdAt || null,
+          };
+        }
+        return null;
+      })
+      .filter(Boolean);
+    return { rollupState: rollup.state || null, failed, error: null };
+  } catch (err) {
+    console.warn(`fetchPRChecks failed for ${owner}/${repo}#${number}:`, err.message);
+    return { rollupState: null, failed: [], error: err.message || 'fetch failed' };
+  }
+}
+
 export async function fetchPRDetail(token, owner, repo, number) {
   const repoFullName = `${owner}/${repo}`;
 
-  const [prRes, filesRes, threadsResult] = await Promise.all([
+  const [prRes, filesRes, threadsResult, checksResult] = await Promise.all([
     fetch(`${API_BASE}/repos/${repoFullName}/pulls/${number}`, { headers: headers(token) }),
     fetch(`${API_BASE}/repos/${repoFullName}/pulls/${number}/files?per_page=100`, {
       headers: headers(token),
     }),
     fetchUnresolvedThreads(token, owner, repo, number),
+    fetchPRChecks(token, owner, repo, number),
   ]);
 
   if (!prRes.ok) throw Object.assign(new Error('GitHub API error'), { status: prRes.status });
@@ -469,5 +712,8 @@ export async function fetchPRDetail(token, owner, repo, number) {
     })),
     unresolvedThreads: threadsResult.items,
     unresolvedThreadsError: threadsResult.error,
+    checksRollupState: checksResult.rollupState,
+    failedChecks: checksResult.failed,
+    failedChecksError: checksResult.error,
   };
 }

@@ -6,7 +6,7 @@ export const setStoredToken = setToken;
 export const clearStoredToken = clearToken;
 export { invalidateApiSwCache };
 
-async function request(method, path, body) {
+async function request(method, path, body, extraHeaders) {
   const token = getToken();
   const opts = {
     method,
@@ -15,6 +15,7 @@ async function request(method, path, body) {
     },
   };
   if (token) opts.headers['X-GitHub-Token'] = token;
+  if (extraHeaders) Object.assign(opts.headers, extraHeaders);
   if (body) opts.body = JSON.stringify(body);
 
   const res = await fetch(path, opts);
@@ -48,7 +49,10 @@ export const api = {
   aiSummarize: (text) => request('POST', '/api/ai/summarize', { text }),
   aiSummarizePR: (prData) => request('POST', '/api/ai/summarize-pr', prData),
   aiStatus: () => request('GET', '/api/ai/status'),
-  updateAiConfig: (config) => request('PUT', '/api/ai/config', config),
+  updateAiConfig: (config) =>
+    // Backend requires this header when `prompts` is in the body — explicit
+    // user-driven save (the settings panel's "保存" button) opts in here.
+    request('PUT', '/api/ai/config', config, { 'X-Confirm-Ai-Config': '1' }),
   refreshPrs: (assignee) =>
     request('POST', assignee ? '/api/prs/refresh?assignee=me' : '/api/prs/refresh'),
   settings: () => request('GET', '/api/settings'),

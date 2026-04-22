@@ -8,10 +8,20 @@ import {
   isAiAvailable,
   onAiAvailabilityChange,
   showToast,
-  isRepoVisible,
   confirmDialog,
+  cleanupLegacyStorage,
 } from './settings.js';
 import { readCache, writeCache, CACHE_KEYS, readAiSummary, writeAiSummary } from './local-cache.js';
+
+// Active = polling AND visible — the unified state ships from backend as
+// `paused`, and lastData is the only place the UI reads it from. Defaults
+// to true before the first /api/prs lands so freshly-added repos aren't
+// accidentally hidden during the bootstrap window.
+function isRepoActive(repoId) {
+  const repo = lastData?.repos?.find((r) => r.repo === repoId);
+  if (!repo) return true;
+  return !repo.paused;
+}
 
 let pollTimer = null;
 let lastDetailTrigger = null; // restore focus to this element when detail pane closes
@@ -35,6 +45,22 @@ function reapplySearchFilter() {
   applySearchFilter();
 }
 
+function ensureSearchEmptyState(query, totalVisible) {
+  const main = document.getElementById('pr-content');
+  if (!main) return;
+  let empty = main.querySelector('.search-empty-state');
+  if (query && totalVisible === 0) {
+    if (!empty) {
+      empty = document.createElement('div');
+      empty.className = 'search-empty-state';
+      main.appendChild(empty);
+    }
+    empty.textContent = `No PRs match “${query}”`;
+  } else if (empty) {
+    empty.remove();
+  }
+}
+
 function applySearchFilter() {
   const input = document.getElementById('pr-search');
   if (!input) return;
@@ -50,13 +76,18 @@ function applySearchFilter() {
     const repoId = card.closest('.repo-section')?.dataset.repo;
     if (repoId && matches) visibleByRepo.set(repoId, (visibleByRepo.get(repoId) || 0) + 1);
   });
+  let totalVisible = 0;
   document.querySelectorAll('.repo-section').forEach((section) => {
     const repoId = section.dataset.repo;
-    const hasContent = (visibleByRepo.get(repoId) || 0) > 0;
-    const isHiddenByVisibility = !isRepoVisible(repoId);
-    const next = hasContent && !isHiddenByVisibility ? '' : 'none';
+    const visibleCount = visibleByRepo.get(repoId) || 0;
+    // Sections for paused repos shouldn't even exist after reconcile, but
+    // we also defend here in case a search runs against a stale DOM.
+    const showSection = visibleCount > 0 && isRepoActive(repoId);
+    const next = showSection ? '' : 'none';
     if (section.style.display !== next) section.style.display = next;
+    if (showSection) totalVisible += visibleCount;
   });
+  ensureSearchEmptyState(q, totalVisible);
 }
 
 // Wrap matched query in <mark> inside the PR title. Restore plain title when
@@ -86,6 +117,21 @@ function highlightTitle(card, query) {
   if (idx + query.length < original.length) {
     titleEl.append(document.createTextNode(original.slice(idx + query.length)));
   }
+}
+
+// Subtle pulse on the "Updated Xs ago" indicator dot whenever a successful
+// poll round-trip lands. Keeps the user oriented during the long-running
+// session without redrawing card content (which the user explicitly didn't
+// want to see flicker on every poll).
+let justUpdatedTimer = null;
+function flashJustUpdated() {
+  const el = document.getElementById('last-updated');
+  if (!el) return;
+  el.classList.remove('just-updated');
+  void el.offsetWidth; // restart the CSS animation
+  el.classList.add('just-updated');
+  if (justUpdatedTimer) clearTimeout(justUpdatedTimer);
+  justUpdatedTimer = setTimeout(() => el.classList.remove('just-updated'), 700);
 }
 
 function updateLastUpdatedDisplay() {
@@ -633,7 +679,9 @@ function renderRepoSection(repoData) {
   const section = document.createElement('div');
   section.className = 'repo-section';
   section.dataset.repo = repoData.repo;
-  if (!isRepoVisible(repoData.repo)) section.style.display = 'none';
+  // Paused now means hidden too; reconcileRepoSections also drops them, but
+  // direct callers (loadSingleRepo, etc.) use this path so we keep the guard.
+  if (repoData.paused) section.style.display = 'none';
 
   const header = document.createElement('div');
   header.className = 'repo-header';
@@ -650,15 +698,6 @@ function renderRepoSection(repoData) {
     warn.textContent = errorInfo.tag;
     warn.title = errorInfo.tooltip;
     header.appendChild(warn);
-  }
-
-  if (repoData.paused) {
-    const badge = document.createElement('span');
-    badge.className = 'repo-paused-badge';
-    badge.textContent = '⏸ Paused';
-    badge.title = 'ポーリングが停止されています';
-    header.appendChild(badge);
-    section.classList.add('repo-paused');
   }
 
   // Per-repo refresh — useful when one repo just hit a transient 5xx and
@@ -713,6 +752,7 @@ function renderRepoSection(repoData) {
     renderCardsInGrid(grid, sorted, limit);
 
     if (sorted.length > limit) {
+      const oldLimit = limit;
       const loadMore = document.createElement('button');
       loadMore.className = 'load-more-btn';
       loadMore.textContent = `Load more (${sorted.length - limit} more)`;
@@ -721,6 +761,11 @@ function renderRepoSection(repoData) {
           (displayLimit.get(repoData.repo) || INITIAL_DISPLAY_LIMIT) + LOAD_MORE_INCREMENT;
         displayLimit.set(repoData.repo, newLimit);
         renderCardsInGrid(grid, sorted, newLimit);
+        // Move keyboard focus to the first newly-revealed card so Tab order
+        // doesn't snap back to the page top after the button vanishes.
+        const cards = grid.querySelectorAll('.pr-card');
+        const target = cards[oldLimit];
+        if (target) target.focus();
         if (sorted.length > newLimit) {
           loadMore.textContent = `Load more (${sorted.length - newLimit} more)`;
         } else {
@@ -788,6 +833,9 @@ async function loadSingleRepo(repoId) {
     // anyway (different URL than /api/prs), so no SW invalidation needed.
     if (lastData) writeCache(CACHE_KEYS.prs, lastData);
     reapplySearchFilter();
+    // Keep header counts in sync with what we just rendered — without this,
+    // unpause→loadSingleRepo would leave stats stale until the next poll.
+    updateStats(lastData);
   } catch (err) {
     loadingSection.remove();
     // Preserve previously-rendered PRs on failure — wiping to [] would hide
@@ -870,6 +918,10 @@ async function loadPRs() {
     // gets overwritten with "now" while we're still showing stale data.
     lastFetchAt = Date.now();
     updateLastUpdatedDisplay();
+    flashJustUpdated();
+    // Successful round-trip — drop any "Server connection error" banner left
+    // from a previous failure so the user isn't told we're still degraded.
+    hideBanner();
     lastData = data;
     writeCache(CACHE_KEYS.prs, data);
     detectChangesAndNotify(data);
@@ -916,6 +968,10 @@ async function loadPRs() {
 // section by data-repo and signature; only replaces sections whose data has
 // changed. Reorders/removes/adds as needed.
 function reconcileRepoSections(main, desiredRepos) {
+  // Paused repos are hidden from the dashboard entirely; the section never
+  // gets created (saves DOM nodes, eliminates "is this visible?" branches in
+  // every downstream consumer).
+  desiredRepos = desiredRepos.filter((r) => !r.paused);
   const existingByRepo = new Map();
   for (const node of Array.from(main.children)) {
     const id = node.dataset?.repo;
@@ -929,6 +985,8 @@ function reconcileRepoSections(main, desiredRepos) {
       } else {
         existingByRepo.set(id, node);
       }
+    } else if (node.classList?.contains('search-empty-state')) {
+      // Preserve the search empty-state placeholder; applySearchFilter owns it.
     } else {
       // Drop any stray non-section node (e.g. an .empty-state div left behind
       // when the dashboard transitions from "no repos" to "has repos").
@@ -968,6 +1026,10 @@ function reconcileRepoSections(main, desiredRepos) {
   }
 }
 
+// Last value for each header stat label. Used to detect changes between
+// polls so we can flash only the value that actually changed.
+const lastStatsValues = new Map();
+
 function updateStats(data) {
   const el = document.getElementById('header-stats');
   if (!el) return;
@@ -983,7 +1045,7 @@ function updateStats(data) {
   let approved = 0;
 
   for (const repo of data.repos) {
-    if (!isRepoVisible(repo.repo)) continue;
+    if (repo.paused) continue;
     for (const pr of repo.prs) {
       total += 1;
       if (pr.reviewStatus === 'REVIEW_REQUIRED' || pr.reviewStatus === 'CHANGES_REQUESTED') {
@@ -1013,6 +1075,14 @@ function updateStats(data) {
     value.textContent = String(item.value);
     stat.append(label, value);
     el.appendChild(stat);
+    // Brief accent flash when a count actually changes between polls. Skip
+    // the very first paint so the initial render isn't a wall of flashes.
+    const prev = lastStatsValues.get(item.label);
+    if (prev !== undefined && prev !== item.value) {
+      value.classList.add('header-stat-value-changed');
+      setTimeout(() => value.classList.remove('header-stat-value-changed'), 800);
+    }
+    lastStatsValues.set(item.label, item.value);
   });
 }
 
@@ -1421,6 +1491,16 @@ function renderSummaryInto(host, kind, { summary, cli, at }) {
   body.className = 'detail-ai-summary-body';
   body.textContent = summary;
   summaryEl.appendChild(body);
+
+  // Indirect prompt-injection mitigation: PR titles/bodies/filenames are
+  // user-controlled GitHub content, so the LLM output may contain hallucinated
+  // claims. Surface this caveat under every summary so reviewers don't treat
+  // the summary as authoritative.
+  const disclaimer = document.createElement('div');
+  disclaimer.className = 'detail-ai-summary-disclaimer';
+  disclaimer.textContent = 'LLM による要約です。重要な判断の前に必ず原文を確認してください。';
+  summaryEl.appendChild(disclaimer);
+
   host.appendChild(summaryEl);
 }
 
@@ -1500,6 +1580,83 @@ function closeDetailPane() {
     lastDetailTrigger.focus();
     lastDetailTrigger = null;
   }
+}
+
+// Map raw GitHub conclusion / state strings to a short, human-readable label
+// so the badge text on each failed check is not just "TIMED_OUT" caps.
+const FAILED_CHECK_LABELS = {
+  FAILURE: 'Failure',
+  TIMED_OUT: 'Timed out',
+  CANCELLED: 'Cancelled',
+  ACTION_REQUIRED: 'Action required',
+  STARTUP_FAILURE: 'Startup failure',
+  ERROR: 'Error',
+};
+
+function renderFailedChecks(container, detail) {
+  const failed = Array.isArray(detail.failedChecks) ? detail.failedChecks : [];
+  const error = detail.failedChecksError;
+  if (!error && failed.length === 0) return;
+
+  const title = document.createElement('div');
+  title.className = 'detail-section-title';
+  title.textContent = error ? 'Failed checks: 取得失敗' : `Failed checks (${failed.length})`;
+  if (error) title.style.color = 'var(--status-pending-text)';
+  container.appendChild(title);
+
+  if (error) {
+    const errEl = document.createElement('div');
+    errEl.className = 'detail-checks-error';
+    errEl.textContent = error;
+    container.appendChild(errEl);
+    return;
+  }
+
+  const list = document.createElement('div');
+  list.className = 'detail-check-list';
+
+  failed.forEach((c) => {
+    // Each entry is rendered as a link when GitHub gave us a destination
+    // URL (Actions log, third-party CI service, etc.); fall back to a plain
+    // div otherwise so the row still appears.
+    const row = document.createElement(c.url ? 'a' : 'div');
+    row.className = 'detail-check';
+    if (c.url) {
+      row.href = c.url;
+      row.target = '_blank';
+      row.rel = 'noopener';
+    }
+
+    const badge = document.createElement('span');
+    badge.className = 'detail-check-badge';
+    badge.textContent = FAILED_CHECK_LABELS[c.conclusion] || c.conclusion || 'Failed';
+    row.appendChild(badge);
+
+    const name = document.createElement('span');
+    name.className = 'detail-check-name';
+    name.textContent = c.name;
+    name.title = c.name;
+    row.appendChild(name);
+
+    if (c.description) {
+      const desc = document.createElement('span');
+      desc.className = 'detail-check-desc';
+      desc.textContent = c.description;
+      desc.title = c.description;
+      row.appendChild(desc);
+    }
+
+    if (c.completedAt) {
+      const time = document.createElement('span');
+      time.className = 'detail-check-time';
+      time.textContent = relativeTime(c.completedAt);
+      row.appendChild(time);
+    }
+
+    list.appendChild(row);
+  });
+
+  container.appendChild(list);
 }
 
 function renderDetailContent(container, detail) {
@@ -1598,6 +1755,12 @@ function renderDetailContent(container, detail) {
     meta.appendChild(el);
   });
   container.appendChild(meta);
+
+  // Failed CI checks: only render the section when there's something to act
+  // on (failed run, fetch error, or — when explicitly red — a "no failing
+  // contexts to enumerate" hint). Successful/pending rollups stay hidden so
+  // the pane isn't dominated by green ticks.
+  renderFailedChecks(container, detail);
 
   // Files
   if (detail.files.length > 0) {
@@ -1877,6 +2040,8 @@ function paintFromCache() {
 
 // Init
 async function init() {
+  cleanupLegacyStorage();
+
   requestNotificationPermission();
 
   // Token lives only in localStorage. No backend session.
@@ -1907,12 +2072,25 @@ async function init() {
     const change =
       typeof changeOrAddedId === 'string' ? { added: changeOrAddedId } : changeOrAddedId || {};
 
-    // Lightweight in-place update: pause toggle doesn't need a server refetch
-    // or full sidebar rebuild. Just sync lastData so subsequent rerenders show
-    // the paused badge correctly.
+    // Pause toggle: mutate the source of truth (`lastData.paused`) so
+    // isRepoActive reflects it, then take the cheapest path that ends in
+    // the right pixels:
+    //   - Pausing: section just needs to disappear; rerender from lastData.
+    //   - Unpausing: backend zeroed out `prs` for paused repos so a rerender
+    //     would flash an empty section. Defer to loadSingleRepo, which
+    //     fetches fresh PRs and re-renders the section in place.
     if (change.pauseChanged) {
       const target = lastData?.repos?.find((r) => r.repo === change.pauseChanged.repo);
-      if (target) target.paused = change.pauseChanged.paused;
+      if (target) {
+        target.paused = change.pauseChanged.paused;
+        if (change.pauseChanged.paused) {
+          rerenderFromLastData();
+          updateStats(lastData);
+        } else {
+          // loadSingleRepo handles its own errors via toast/banner.
+          loadSingleRepo(change.pauseChanged.repo);
+        }
+      }
       return;
     }
 
@@ -1994,12 +2172,21 @@ async function init() {
   if (sortSelect) {
     sortSelect.value = getSortKey();
     sortSelect.addEventListener('change', () => {
+      // Preserve scroll position across the full re-render — without this the
+      // page snaps back to the top whenever the sort changes, which is
+      // disorienting when the user is mid-scroll deep into a long list.
+      const main = document.querySelector('.main');
+      const scrollTop = main ? main.scrollTop : window.scrollY;
       setSortKey(sortSelect.value);
       if (lastData) {
         rerenderFromLastData();
       } else {
         loadPRs();
       }
+      requestAnimationFrame(() => {
+        if (main) main.scrollTop = scrollTop;
+        else window.scrollTo(0, scrollTop);
+      });
     });
   }
 

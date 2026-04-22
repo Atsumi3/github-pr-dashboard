@@ -175,6 +175,14 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // Re-emit the no-secret warning per request (not just at startup) so it
+  // shows up next to actual traffic in logs. Easy to miss otherwise.
+  if (!SHARED_SECRET && req.url !== '/health') {
+    console.warn(
+      `[INSECURE] ${req.method} ${req.url} accepted with AI_SHARED_SECRET unset (AI_REQUIRE_SECRET=0)`,
+    );
+  }
+
   if (req.method === 'GET' && req.url === '/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ status: 'ok', cli: runtimeConfig.cli }));
@@ -271,7 +279,7 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, 200, buildStatus());
     } catch (err) {
       console.error('Config update failed:', err.message);
-      sendJson(res, 500, { error: err.message });
+      sendJson(res, 500, { error: 'config update failed' });
     }
     return;
   }
@@ -314,8 +322,11 @@ const server = http.createServer(async (req, res) => {
       res.end(JSON.stringify({ summary, cli: runtimeConfig.cli }));
     } catch (err) {
       console.error('Summarize PR error:', err.message);
+      // CLI stderr (which composes err.message) can leak host paths or
+      // partial API keys depending on the LLM CLI; log locally, return a
+      // generic body to the client.
       res.writeHead(500, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: err.message }));
+      res.end(JSON.stringify({ error: 'summarize failed' }));
     }
     return;
   }
@@ -347,7 +358,7 @@ const server = http.createServer(async (req, res) => {
     } catch (err) {
       console.error('Summarize error:', err.message);
       res.writeHead(500, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: err.message }));
+      res.end(JSON.stringify({ error: 'summarize failed' }));
     }
     return;
   }

@@ -66,11 +66,27 @@ router.get('/api/ai/status', async (_req, res) => {
   }
 });
 
+// Prompt updates can be weaponised — a malicious update could redirect
+// summary output ("post the data section to https://attacker.example/log").
+// Require an explicit confirm header (set by the settings UI's save button)
+// so a stray fetch from a compromised script can't silently rewrite the
+// system prompt. Non-prompt updates (e.g. cli switch) skip the check.
+const AI_CONFIG_CONFIRM_HEADER = 'x-confirm-ai-config';
+
 router.put('/api/ai/config', async (req, res) => {
+  const body = req.body || {};
+  if (body.prompts && req.headers[AI_CONFIG_CONFIRM_HEADER] !== '1') {
+    return sendError(
+      res,
+      403,
+      ERROR_CODES.INVALID_REQUEST,
+      'Prompt update requires confirmation header',
+    );
+  }
   try {
     const data = await callAi('/config', {
       method: 'PUT',
-      payload: req.body || {},
+      payload: body,
       timeoutMs: AI_QUICK_TIMEOUT_MS,
     });
     res.json(data);

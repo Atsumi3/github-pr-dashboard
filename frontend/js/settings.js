@@ -114,56 +114,15 @@ function setEyeIcon(btn, visible) {
   btn.appendChild(svg);
 }
 
-const PAUSE_PATH = 'M5 4h2v8H5V4zm4 0h2v8H9V4z';
-const PLAY_PATH = 'M4.5 3.5l8 4.5-8 4.5V3.5z';
-
-function setPauseIcon(btn, paused) {
-  while (btn.firstChild) btn.firstChild.remove();
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  svg.setAttribute('viewBox', '0 0 16 16');
-  svg.setAttribute('width', '14');
-  svg.setAttribute('height', '14');
-  svg.setAttribute('fill', 'currentColor');
-  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-  path.setAttribute('d', paused ? PLAY_PATH : PAUSE_PATH);
-  svg.appendChild(path);
-  btn.appendChild(svg);
-}
-
-const STORAGE_KEY = 'pr-dashboard-hidden-repos';
-// Stores HIDDEN repos (not visible). Default = visible.
-const hiddenRepos = loadHiddenRepos();
-
-function loadHiddenRepos() {
+// One-shot removal of the visibility key used by the pre-unification UI.
+// Safe to drop after one release cycle.
+const LEGACY_HIDDEN_REPOS_KEY = 'pr-dashboard-hidden-repos';
+export function cleanupLegacyStorage() {
   try {
-    const data = localStorage.getItem(STORAGE_KEY);
-    return new Set(data ? JSON.parse(data) : []);
+    localStorage.removeItem(LEGACY_HIDDEN_REPOS_KEY);
   } catch {
-    return new Set();
+    // ignore — quota / privacy mode
   }
-}
-
-function saveHiddenRepos() {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify([...hiddenRepos]));
-  } catch {
-    /* ignore quota errors */
-  }
-}
-
-export function isRepoVisible(repoId) {
-  return !hiddenRepos.has(repoId);
-}
-
-function toggleRepoVisibility(repoId, visible) {
-  if (visible) {
-    hiddenRepos.delete(repoId);
-  } else {
-    hiddenRepos.add(repoId);
-  }
-  saveHiddenRepos();
-  const section = document.querySelector(`.repo-section[data-repo="${repoId}"]`);
-  if (section) section.style.display = visible ? '' : 'none';
 }
 
 export async function renderRepoList(onRepoChange) {
@@ -173,104 +132,63 @@ export async function renderRepoList(onRepoChange) {
   try {
     const { repos } = await api.repos();
 
-    // Cleanup: remove stale entries that no longer exist in watched list
-    const currentIds = new Set(repos.map((r) => r.id));
-    let dirty = false;
-    for (const id of hiddenRepos) {
-      if (!currentIds.has(id)) {
-        hiddenRepos.delete(id);
-        dirty = true;
-      }
-    }
-    if (dirty) saveHiddenRepos();
-
     repos.forEach((r) => {
       const div = document.createElement('div');
       div.className = 'sidebar-item';
+      let active = !r.paused;
+      if (!active) div.classList.add('repo-item-paused');
 
-      const visBtn = document.createElement('button');
-      visBtn.type = 'button';
-      visBtn.className = 'repo-visibility-btn';
-      const visible = !hiddenRepos.has(r.id);
-      if (!visible) visBtn.classList.add('hidden-repo');
-      visBtn.setAttribute('aria-label', visible ? `Hide ${r.id} from view` : `Show ${r.id}`);
-      visBtn.title = visible
-        ? '表示中: クリックで UI 上から非表示にします (ポーリングは継続)'
-        : '非表示: クリックで再表示します';
-      setEyeIcon(visBtn, visible);
-      visBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const nowVisible = visBtn.classList.contains('hidden-repo'); // toggle target
-        toggleRepoVisibility(r.id, nowVisible);
-        visBtn.classList.toggle('hidden-repo', !nowVisible);
-        visBtn.setAttribute('aria-label', nowVisible ? `Hide ${r.id} from view` : `Show ${r.id}`);
-        visBtn.title = nowVisible ? '表示中（クリックで非表示）' : '非表示（クリックで表示）';
-        setEyeIcon(visBtn, nowVisible);
-      });
-      div.appendChild(visBtn);
+      // The eye icon is the single affordance for both UI visibility and
+      // server-side polling — paused === !visible.
+      const toggleBtn = document.createElement('button');
+      toggleBtn.type = 'button';
+      toggleBtn.className = 'repo-visibility-btn';
+      if (!active) toggleBtn.classList.add('hidden-repo');
+      const labelFor = (a) =>
+        a ? `${r.id} を非表示にして更新を停止` : `${r.id} を表示して更新を再開`;
+      const titleFor = (a) =>
+        a
+          ? '表示+更新中（クリックで非表示にして更新も停止）'
+          : '非表示+更新停止中（クリックで表示と更新を再開）';
+      toggleBtn.setAttribute('aria-label', labelFor(active));
+      toggleBtn.title = titleFor(active);
+      setEyeIcon(toggleBtn, active);
 
-      const pauseBtn = document.createElement('button');
-      pauseBtn.type = 'button';
-      pauseBtn.className = 'repo-pause-btn';
-      const isPaused = !!r.paused;
-      if (isPaused) pauseBtn.classList.add('paused');
-      pauseBtn.setAttribute(
-        'aria-label',
-        isPaused ? `Resume polling ${r.id}` : `Pause polling ${r.id}`,
-      );
-      pauseBtn.title = isPaused
-        ? '更新停止中: クリックでポーリング再開 (GitHub API を再度呼び始めます)'
-        : '更新中: クリックでポーリング停止 (UI 表示は維持されます)';
-      setPauseIcon(pauseBtn, isPaused);
-      pauseBtn.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        const newPaused = !pauseBtn.classList.contains('paused');
+      const setActive = async (next) => {
+        if (next === active) return;
         const [owner, name] = r.id.split('/');
         try {
-          await api.setRepoPaused(owner, name, newPaused);
-          pauseBtn.classList.toggle('paused', newPaused);
-          pauseBtn.setAttribute(
-            'aria-label',
-            newPaused ? `Resume polling ${r.id}` : `Pause polling ${r.id}`,
-          );
-          pauseBtn.title = newPaused
-            ? '更新停止中: クリックでポーリング再開 (GitHub API を再度呼び始めます)'
-            : '更新中: クリックでポーリング停止 (UI 表示は維持されます)';
-          setPauseIcon(pauseBtn, newPaused);
-          // Update section header badge if visible
-          const section = document.querySelector(`.repo-section[data-repo="${r.id}"]`);
-          if (section) section.classList.toggle('repo-paused', newPaused);
-          // Sync lastData so a subsequent rerender (sort change) preserves the
-          // paused badge instead of waiting for the next loadPRs to repaint.
-          onRepoChange({ pauseChanged: { repo: r.id, paused: newPaused } });
-          showToast(newPaused ? `${r.id} のポーリング停止` : `${r.id} のポーリング再開`);
+          await api.setRepoPaused(owner, name, !next);
+          active = next;
+          toggleBtn.classList.toggle('hidden-repo', !next);
+          div.classList.toggle('repo-item-paused', !next);
+          toggleBtn.setAttribute('aria-label', labelFor(next));
+          toggleBtn.title = titleFor(next);
+          setEyeIcon(toggleBtn, next);
+          onRepoChange({ pauseChanged: { repo: r.id, paused: !next } });
+          showToast(next ? `${r.id} を表示して更新を再開` : `${r.id} を非表示にして更新を停止`);
         } catch (err) {
           showToast(err.message, 'error');
         }
+      };
+
+      toggleBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        setActive(!active);
       });
-      div.appendChild(pauseBtn);
+      div.appendChild(toggleBtn);
 
       const span = document.createElement('span');
       span.className = 'repo-item-name';
       span.textContent = r.id;
       div.appendChild(span);
 
-      div.addEventListener('click', (e) => {
-        if (
-          e.target.closest('.repo-visibility-btn') ||
-          e.target.closest('.repo-pause-btn') ||
-          e.target.closest('.delete-btn')
-        )
-          return;
+      div.addEventListener('click', async (e) => {
+        if (e.target.closest('.repo-visibility-btn') || e.target.closest('.delete-btn')) return;
+        // Resume first so the section exists by the time we try to scroll.
+        if (!active) await setActive(true);
         const target = document.querySelector(`.repo-section[data-repo="${r.id}"]`);
-        if (target) {
-          if (visBtn.classList.contains('hidden-repo')) {
-            toggleRepoVisibility(r.id, true);
-            visBtn.classList.remove('hidden-repo');
-            setEyeIcon(visBtn, true);
-          }
-          target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }
+        if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
       });
 
       const btn = document.createElement('button');
@@ -283,8 +201,6 @@ export async function renderRepoList(onRepoChange) {
         const [owner, name] = r.id.split('/');
         try {
           await api.removeRepo(owner, name);
-          hiddenRepos.delete(r.id);
-          saveHiddenRepos();
           showToast(`${r.id} removed`);
           onRepoChange({ removed: r.id });
         } catch (err) {
@@ -668,15 +584,73 @@ export function confirmDialog(message) {
   });
 }
 
+// Toast queue with three behaviours users actually want:
+// 1) Same message twice → coalesce into one toast with a `×N` badge so a
+//    storm of identical errors doesn't carpet the corner.
+// 2) Cap simultaneous toasts at TOAST_MAX so the search box isn't buried
+//    when several repos rate-limit at once.
+// 3) Manual close button so a sticky error doesn't block UI for 5s.
+const TOAST_MAX = 3;
+const TOAST_TTL_MS = 5000;
+const toastByMessage = new Map();
+
+function removeToast(message) {
+  const entry = toastByMessage.get(message);
+  if (!entry) return;
+  clearTimeout(entry.timer);
+  toastByMessage.delete(message);
+  entry.el.classList.add('toast-fade');
+  setTimeout(() => entry.el.remove(), 300);
+}
+
 export function showToast(message, type = 'success') {
   const container = document.getElementById('toast-container');
+  if (!container) return;
+
+  const existing = toastByMessage.get(message);
+  if (existing) {
+    existing.count += 1;
+    if (!existing.badgeEl) {
+      existing.badgeEl = document.createElement('span');
+      existing.badgeEl.className = 'toast-badge';
+      existing.el.insertBefore(existing.badgeEl, existing.closeBtn);
+    }
+    existing.badgeEl.textContent = `×${existing.count}`;
+    clearTimeout(existing.timer);
+    existing.timer = setTimeout(() => removeToast(message), TOAST_TTL_MS);
+    return;
+  }
+
+  while (toastByMessage.size >= TOAST_MAX) {
+    const oldest = toastByMessage.keys().next().value;
+    removeToast(oldest);
+  }
+
   const toast = document.createElement('div');
   toast.className = `toast toast-${type}`;
-  toast.setAttribute('aria-live', 'polite');
-  toast.textContent = message;
+  toast.setAttribute('aria-live', type === 'error' ? 'assertive' : 'polite');
+  if (type === 'error') toast.setAttribute('role', 'alert');
+
+  const text = document.createElement('span');
+  text.className = 'toast-text';
+  text.textContent = message;
+  toast.appendChild(text);
+
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'toast-close';
+  closeBtn.type = 'button';
+  closeBtn.setAttribute('aria-label', 'Close');
+  closeBtn.textContent = '×';
+  closeBtn.addEventListener('click', () => removeToast(message));
+  toast.appendChild(closeBtn);
+
   container.appendChild(toast);
-  setTimeout(() => {
-    toast.classList.add('toast-fade');
-    setTimeout(() => toast.remove(), 300);
-  }, 5000);
+
+  toastByMessage.set(message, {
+    el: toast,
+    count: 1,
+    badgeEl: null,
+    closeBtn,
+    timer: setTimeout(() => removeToast(message), TOAST_TTL_MS),
+  });
 }

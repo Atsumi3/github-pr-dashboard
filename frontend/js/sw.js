@@ -1,7 +1,10 @@
-const CACHE_VERSION = 'v2';
+const CACHE_VERSION = 'v3';
 const API_CACHE = `api-cache-${CACHE_VERSION}`;
 const API_PATH_PREFIX = '/api/';
-const CACHE_TTL_MS = 5 * 60 * 1000;
+// 15 min — aligned with local-cache.js's PRS_TTL_MS so the SW and the
+// in-page localStorage layer expire as one. Mismatched TTLs created an
+// awkward "SW expired but localStorage still hot" intermediate state.
+const CACHE_TTL_MS = 15 * 60 * 1000;
 const CACHE_MAX_ENTRIES = 50;
 const CACHE_TRIM_INTERVAL = 10;
 const CACHED_AT_HEADER = 'x-sw-cached-at';

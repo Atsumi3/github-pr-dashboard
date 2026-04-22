@@ -1,10 +1,10 @@
 import { Router } from 'express';
-import { createHash } from 'node:crypto';
 import * as store from '../store.js';
 import * as cache from '../cache.js';
 import * as detailCache from '../detailCache.js';
 import * as github from '../github.js';
-import { ERROR_CODES, sendError } from '../httpError.js';
+import { ERROR_CODES, mapGithubError, sendError } from '../httpError.js';
+import { tokenHash } from '../tokenHash.js';
 
 const router = Router();
 
@@ -14,10 +14,6 @@ const router = Router();
 const ME_TTL_MS = 10 * 60 * 1000;
 const ME_CACHE_MAX = 200;
 const meCache = new Map();
-
-function tokenKey(token) {
-  return createHash('sha256').update(token).digest('hex');
-}
 
 // Coalesce concurrent fetchAllPRs calls so that a thundering herd of cache-miss
 // requests results in only one GraphQL fan-out.
@@ -29,8 +25,13 @@ function tokenKey(token) {
 // reviewed end-to-end.
 let inflightFetchAll = null;
 
-export async function fetchAllPRs(token) {
-  if (inflightFetchAll) return inflightFetchAll;
+export async function fetchAllPRs(token, me = null, { force = false } = {}) {
+  // `force` is used by /api/prs/refresh: if a poll-triggered fetch is already
+  // inflight when refresh fires, awaiting that stale Promise would silently
+  // defeat the user's "give me the latest right now" intent. Cancel the
+  // coalesce in that case so refresh actually re-runs.
+  if (inflightFetchAll && !force) return inflightFetchAll;
+  if (force) inflightFetchAll = null;
   inflightFetchAll = (async () => {
     const allRepos = await store.getRepos();
     // Intentionally do NOT clear cache when token/repos are missing — keep the
@@ -43,46 +44,36 @@ export async function fetchAllPRs(token) {
       return;
     }
 
-    console.log(
-      `Fetch: fetching PRs for ${activeRepos.length}/${allRepos.length} repo(s) (others paused)`,
-    );
-    // Use peek() (not get()) so TTL expiry doesn't wipe the per-repo
-    // fallback. Otherwise a tab that was backgrounded longer than
-    // pollInterval would lose the last-known PRs as soon as one repo's
-    // refetch failed (e.g. WinTicket/app's recurring GitHub 502).
     const previous = cache.peek() || [];
     const previousByRepo = new Map(previous.map((r) => [r.repo, r]));
-    const results = await Promise.all(
-      activeRepos.map(async (repo) => {
-        try {
-          const prs = await github.fetchOpenPRs(token, repo.id);
-          return { repo: repo.id, prs, error: null };
-        } catch (err) {
-          const detail = err.errors
-            ? JSON.stringify(err.errors)
-            : err.status
-              ? `status=${err.status}`
-              : '';
-          console.error(
-            `Fetch: failed to fetch ${repo.id}: ${err.message}${detail ? ' | ' + detail : ''}`,
-          );
-          // Preserve the previous successful PR list for this repo rather than
-          // showing "Repository inaccessible" whenever GitHub returns a
-          // transient 5xx. Users see slightly stale data instead of an empty
-          // section until the next successful poll.
-          const prev = previousByRepo.get(repo.id);
-          // Carry the HTTP status so the frontend can distinguish "your token
-          // can't see this repo" (4xx) from "GitHub itself is having a bad
-          // moment" (5xx) — the previous generic "Repository inaccessible"
-          // misled users into thinking they had a permission problem.
-          return {
-            repo: repo.id,
-            prs: prev?.prs || [],
-            error: { message: err.message, status: err.status || null },
-          };
-        }
-      }),
-    );
+
+    let results;
+    if (me) {
+      // Server-side filter via GitHub's GraphQL search. Reduces fan-out from
+      // N repos -> ~ceil(N/5)*2 search queries, AND makes GitHub do the
+      // assignee/reviewer matching instead of fetching everything and
+      // throwing most of it away.
+      console.log(
+        `Fetch (search): involves/review-requested for ${me} across ${activeRepos.length} repo(s)`,
+      );
+      try {
+        results = await github.searchOpenPRsForMe(
+          token,
+          activeRepos.map((r) => r.id),
+          me,
+        );
+      } catch (err) {
+        // Search itself failed wholesale — fall back to per-repo so the user
+        // gets at least partial data. Log distinctly so this is debuggable.
+        console.warn(`Search failed (${err.message}), falling back to per-repo fetch`);
+        results = await fetchPerRepo(token, activeRepos, previousByRepo);
+      }
+    } else {
+      console.log(
+        `Fetch: per-repo for ${activeRepos.length}/${allRepos.length} repo(s) (others paused)`,
+      );
+      results = await fetchPerRepo(token, activeRepos, previousByRepo);
+    }
 
     const hasSuccess = results.some((r) => r.error === null);
     if (hasSuccess) {
@@ -97,6 +88,36 @@ export async function fetchAllPRs(token) {
   } finally {
     inflightFetchAll = null;
   }
+}
+
+// Per-repo fetch path used when no `me` is set or as fallback when the
+// server-side search query fails. previousByRepo lets us carry the last
+// successful PR list forward when one repo's refetch errors out (e.g.
+// WinTicket/app's recurring GitHub 502).
+async function fetchPerRepo(token, activeRepos, previousByRepo) {
+  return Promise.all(
+    activeRepos.map(async (repo) => {
+      try {
+        const prs = await github.fetchOpenPRs(token, repo.id);
+        return { repo: repo.id, prs, error: null };
+      } catch (err) {
+        const detail = err.errors
+          ? JSON.stringify(err.errors)
+          : err.status
+            ? `status=${err.status}`
+            : '';
+        console.error(
+          `Fetch: failed to fetch ${repo.id}: ${err.message}${detail ? ' | ' + detail : ''}`,
+        );
+        const prev = previousByRepo.get(repo.id);
+        return {
+          repo: repo.id,
+          prs: prev?.prs || [],
+          error: { message: err.message, status: err.status || null },
+        };
+      }
+    }),
+  );
 }
 
 function isRelatedToMe(pr, me) {
@@ -114,7 +135,7 @@ function isRelatedToMe(pr, me) {
 
 async function resolveMe(token, assigneeQuery) {
   if (assigneeQuery !== 'me' || !token) return null;
-  const key = tokenKey(token);
+  const key = tokenHash(token);
   const cached = meCache.get(key);
   if (cached && cached.expiresAt > Date.now()) {
     // Re-insert to refresh LRU position.
@@ -155,11 +176,15 @@ async function buildResponse(data, me) {
   const cachedById = new Map(cachedRepos.map((r) => [r.repo, r]));
   let repos = watched.map((w) => {
     const cached = cachedById.get(w.id);
+    const paused = !!w.paused;
     return {
       repo: w.id,
-      paused: !!w.paused,
-      prs: cached ? cached.prs : [],
-      error: cached ? cached.error : null,
+      paused,
+      // Paused repos must surface zero PRs even if the cache still holds a
+      // pre-pause snapshot. Otherwise a freshly-paused repo flickers back its
+      // last-known PRs for one polling cycle until cache.upsertRepo runs.
+      prs: paused ? [] : cached ? cached.prs : [],
+      error: paused ? null : cached ? cached.error : null,
     };
   });
   if (me) {
@@ -182,7 +207,7 @@ router.get('/api/prs', async (req, res) => {
     return res.json(await buildResponse(data, me));
   }
 
-  await fetchAllPRs(req.token);
+  await fetchAllPRs(req.token, me);
   res.json(await buildResponse(cache.get() || [], me));
 });
 
@@ -198,8 +223,12 @@ router.get('/api/prs/repo/:owner/:repo', async (req, res) => {
     const filteredPrs = me ? prs.filter((pr) => isRelatedToMe(pr, me)) : prs;
     res.json({ repo: repoId, prs: filteredPrs });
   } catch (err) {
+    // Log the full GitHub error for ops, but return a generic body to the
+    // client so internal paths / GraphQL diagnostics don't leak via /api/.
     console.error(`Single repo fetch failed for ${repoId}:`, err.message);
-    sendError(res, err.status || 500, ERROR_CODES.INTERNAL_ERROR, err.message);
+    const mapped = mapGithubError(err);
+    if (mapped) return sendError(res, mapped.status, mapped.code, mapped.message);
+    sendError(res, 500, ERROR_CODES.INTERNAL_ERROR, 'Failed to fetch repository');
   }
 });
 
@@ -214,16 +243,18 @@ router.get('/api/prs/:owner/:repo/:number', async (req, res) => {
 
   try {
     const detail = await github.fetchPRDetail(req.token, owner, repo, number);
-    // Don't cache partial-failure detail (unresolved threads fetch failed) —
-    // otherwise the user sees the error banner for up to pollInterval seconds
-    // even after GitHub recovers.
-    if (!detail.unresolvedThreadsError) {
+    // Don't cache partial-failure detail (any sub-fetch failed) — otherwise
+    // the user sees the error banner for up to pollInterval seconds even
+    // after GitHub recovers. New error fields go in this list.
+    if (!detail.unresolvedThreadsError && !detail.failedChecksError) {
       detailCache.set(owner, repo, number, detail);
     }
     res.json(detail);
   } catch (err) {
     console.error('PR detail failed:', err.message);
-    sendError(res, err.status || 500, ERROR_CODES.INTERNAL_ERROR, err.message);
+    const mapped = mapGithubError(err);
+    if (mapped) return sendError(res, mapped.status, mapped.code, mapped.message);
+    sendError(res, 500, ERROR_CODES.INTERNAL_ERROR, 'Failed to fetch PR detail');
   }
 });
 
@@ -232,7 +263,7 @@ router.post('/api/prs/refresh', async (req, res) => {
 
   cache.clear();
   detailCache.clear();
-  await fetchAllPRs(req.token);
+  await fetchAllPRs(req.token, me, { force: true });
   res.json(await buildResponse(cache.get() || [], me));
 });
 

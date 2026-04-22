@@ -12,12 +12,20 @@ export function getToken() {
 
 export function setToken(token) {
   if (!token) return;
+  let prev = null;
   try {
+    prev = localStorage.getItem(KEY);
     localStorage.setItem(KEY, token);
   } catch {
     // ignore quota / privacy mode
   }
   syncTokenToServiceWorker(token);
+  // If the user swapped GitHub identities, drop SW-cached responses from the
+  // previous identity so the new session doesn't briefly show the old user's
+  // PR list out of cache.
+  if (prev && prev !== token) {
+    clearServiceWorkerCache();
+  }
 }
 
 export function clearToken() {
