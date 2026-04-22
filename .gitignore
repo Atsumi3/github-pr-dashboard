@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# AI server runtime config (CLI selection + custom prompts)
+ai-server/ai-config.json
+
+# Application data (persistent volumes, generated configs)
+data/
+
+# Environment files (only .env.example is tracked)
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+
+# OS-generated files
+.DS_Store
+Thumbs.db
+
+# Editor/IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.tsbuildinfo
+
+# AI / agent tooling
+.claude/
+.playwright-mcp/
+
+# Build artifacts
+dist/
+build/
+coverage/
+.cache/
+
+# Live preview snapshot at repo root (do not blanket-ignore *.png so docs/screenshots/ stays tracked)
+/live-index.png

@@ -1,0 +1,46 @@
+{
+  "name": "github-pr-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "description": "Local single-user dashboard for monitoring GitHub Pull Requests across multiple repositories.",
+  "keywords": [
+    "github",
+    "pull-request",
+    "pr",
+    "dashboard",
+    "monitoring",
+    "developer-tools",
+    "local-first",
+    "self-hosted",
+    "docker",
+    "service-worker"
+  ],
+  "homepage": "https://github.com/Atsumi3/github-pr-dashboard#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Atsumi3/github-pr-dashboard.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Atsumi3/github-pr-dashboard/issues"
+  },
+  "author": "Atsumi3 (https://github.com/Atsumi3)",
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@9.15.5",
+  "scripts": {
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "@eslint/js": "9.17.0",
+    "eslint": "9.17.0",
+    "eslint-config-prettier": "9.1.0",
+    "globals": "15.14.0",
+    "prettier": "3.4.2"
+  }
+}

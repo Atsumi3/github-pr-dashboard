@@ -1,0 +1,12 @@
+node_modules
+**/node_modules
+.pnpm-store
+data
+backend/pnpm-lock.yaml
+pnpm-lock.yaml
+docs/screenshots
+docs/mockup.html
+docs/design-historical.md
+.github/ISSUE_TEMPLATE
+.github/PULL_REQUEST_TEMPLATE.md
+LICENSE
