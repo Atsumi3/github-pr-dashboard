@@ -20,7 +20,11 @@ async function request(method, path, body) {
   const data = await res.json().catch(() => null);
 
   if (!res.ok) {
-    if (res.status === 401) {
+    // Only wipe the PAT when GitHub itself rejected it (backend maps that
+    // to GITHUB_TOKEN_EXPIRED). Other 401s — backend's own INVALID_TOKEN
+    // when a SW race drops the header, transient 5xx-then-401 retries —
+    // shouldn't nuke the user's stored token.
+    if (res.status === 401 && data?.error?.code === 'GITHUB_TOKEN_EXPIRED') {
       clearToken();
     }
     const err = new Error(data?.error?.message || `HTTP ${res.status}`);

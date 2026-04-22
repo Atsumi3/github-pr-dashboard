@@ -1,4 +1,4 @@
-import { getToken, clearToken, syncTokenToServiceWorker } from './token-store.js';
+import { getToken, syncTokenToServiceWorker } from './token-store.js';
 
 if ('serviceWorker' in navigator) {
   // Explicit scope is required; default scope is the directory of the script
@@ -20,13 +20,4 @@ if ('serviceWorker' in navigator) {
     .catch(() => {
       // SW registration failure is non-fatal; api.js still attaches the header.
     });
-
-  navigator.serviceWorker.addEventListener('message', (event) => {
-    if (event.data?.type === 'LOGOUT_REQUIRED') {
-      clearToken();
-      if (window.location.pathname !== '/setup.html') {
-        window.location.href = '/setup.html';
-      }
-    }
-  });
 }

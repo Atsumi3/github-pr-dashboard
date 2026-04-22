@@ -1539,10 +1539,29 @@ async function init() {
     const { user } = await api.authMe();
     me = user;
     writeCache(CACHE_KEYS.me, user);
-  } catch {
-    clearStoredToken();
-    window.location.href = '/setup.html';
-    return;
+  } catch (err) {
+    // Only force re-login when GitHub itself rejected the PAT. Transient
+    // failures (network blip, backend 5xx, the SW-takeover race that drops
+    // a header) shouldn't wipe credentials and bounce the user out — they
+    // would all flush the user to setup.html and lose the stored PAT.
+    if (err.code === 'GITHUB_TOKEN_EXPIRED') {
+      clearStoredToken();
+      window.location.href = '/setup.html';
+      return;
+    }
+    // Otherwise: try to bootstrap from cached identity so the page still
+    // loads and polling can recover on the next tick.
+    const cached = readCache(CACHE_KEYS.me);
+    if (cached?.data) {
+      me = cached.data;
+      showToast('GitHub への接続に失敗しました。キャッシュ表示中', 'error');
+    } else {
+      // No cached identity to fall back to — surface the error and stop.
+      // We don't redirect to setup.html because the PAT is still valid as
+      // far as we know, and forcing setup would just lose it.
+      showToast(`認証情報の取得に失敗: ${err.message || 'unknown error'}`, 'error');
+      return;
+    }
   }
 
   applyUserToHeader(me);

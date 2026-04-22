@@ -81,8 +81,12 @@ async function handleApi(request) {
 
     if (response.status === 401) {
       // Drop any stale entries for this user before they sign in again.
+      // Note: we deliberately do NOT broadcast LOGOUT_REQUIRED from here.
+      // The SW can't read the response body (so it can't tell apart
+      // GitHub's GITHUB_TOKEN_EXPIRED from a transient backend 401 caused
+      // by a SW-takeover race that drops the header). Page-side api.js
+      // has the error.code in hand and decides whether to clear the PAT.
       await caches.delete(API_CACHE);
-      await notifyLogoutRequired();
     }
 
     if (request.method === 'GET' && response.ok) {
@@ -145,16 +149,5 @@ async function trimCache(cache) {
   // keys() returns oldest first; delete from the front.
   for (let i = 0; i < overflow; i++) {
     await cache.delete(requests[i]);
-  }
-}
-
-async function notifyLogoutRequired() {
-  try {
-    const clients = await self.clients.matchAll({ includeUncontrolled: true });
-    for (const client of clients) {
-      client.postMessage({ type: 'LOGOUT_REQUIRED' });
-    }
-  } catch {
-    // ignore
   }
 }
