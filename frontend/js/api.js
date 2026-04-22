@@ -1,9 +1,10 @@
-import { getToken, setToken, clearToken } from './token-store.js';
+import { getToken, setToken, clearToken, invalidateApiSwCache } from './token-store.js';
 
 // Backward-compatible re-exports.
 export const getStoredToken = getToken;
 export const setStoredToken = setToken;
 export const clearStoredToken = clearToken;
+export { invalidateApiSwCache };
 
 async function request(method, path, body) {
   const token = getToken();

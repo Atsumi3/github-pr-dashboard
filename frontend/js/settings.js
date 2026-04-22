@@ -193,15 +193,17 @@ export async function renderRepoList(onRepoChange) {
       visBtn.className = 'repo-visibility-btn';
       const visible = !hiddenRepos.has(r.id);
       if (!visible) visBtn.classList.add('hidden-repo');
-      visBtn.setAttribute('aria-label', visible ? `Hide ${r.id}` : `Show ${r.id}`);
-      visBtn.title = visible ? '表示中（クリックで非表示）' : '非表示（クリックで表示）';
+      visBtn.setAttribute('aria-label', visible ? `Hide ${r.id} from view` : `Show ${r.id}`);
+      visBtn.title = visible
+        ? '表示中: クリックで UI 上から非表示にします (ポーリングは継続)'
+        : '非表示: クリックで再表示します';
       setEyeIcon(visBtn, visible);
       visBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         const nowVisible = visBtn.classList.contains('hidden-repo'); // toggle target
         toggleRepoVisibility(r.id, nowVisible);
         visBtn.classList.toggle('hidden-repo', !nowVisible);
-        visBtn.setAttribute('aria-label', nowVisible ? `Hide ${r.id}` : `Show ${r.id}`);
+        visBtn.setAttribute('aria-label', nowVisible ? `Hide ${r.id} from view` : `Show ${r.id}`);
         visBtn.title = nowVisible ? '表示中（クリックで非表示）' : '非表示（クリックで表示）';
         setEyeIcon(visBtn, nowVisible);
       });
@@ -216,7 +218,9 @@ export async function renderRepoList(onRepoChange) {
         'aria-label',
         isPaused ? `Resume polling ${r.id}` : `Pause polling ${r.id}`,
       );
-      pauseBtn.title = isPaused ? '更新停止中（クリックで再開）' : '更新中（クリックで停止）';
+      pauseBtn.title = isPaused
+        ? '更新停止中: クリックでポーリング再開 (GitHub API を再度呼び始めます)'
+        : '更新中: クリックでポーリング停止 (UI 表示は維持されます)';
       setPauseIcon(pauseBtn, isPaused);
       pauseBtn.addEventListener('click', async (e) => {
         e.stopPropagation();
@@ -229,7 +233,9 @@ export async function renderRepoList(onRepoChange) {
             'aria-label',
             newPaused ? `Resume polling ${r.id}` : `Pause polling ${r.id}`,
           );
-          pauseBtn.title = newPaused ? '更新停止中（クリックで再開）' : '更新中（クリックで停止）';
+          pauseBtn.title = newPaused
+            ? '更新停止中: クリックでポーリング再開 (GitHub API を再度呼び始めます)'
+            : '更新中: クリックでポーリング停止 (UI 表示は維持されます)';
           setPauseIcon(pauseBtn, newPaused);
           // Update section header badge if visible
           const section = document.querySelector(`.repo-section[data-repo="${r.id}"]`);

@@ -1,4 +1,4 @@
-import { api, getStoredToken, clearStoredToken } from './api.js';
+import { api, getStoredToken, clearStoredToken, invalidateApiSwCache } from './api.js';
 import {
   initSidebar,
   renderRepoList,
@@ -14,6 +14,7 @@ import {
 import { readCache, writeCache, CACHE_KEYS, readAiSummary, writeAiSummary } from './local-cache.js';
 
 let pollTimer = null;
+let lastDetailTrigger = null; // restore focus to this element when detail pane closes
 let hasRunInitialScan = false;
 let previousPRState = null; // Map of "repo#number" -> { reviewStatus, exists }
 let lastFetchAt = 0; // timestamp (ms) of the most recent loadPRs() invocation
@@ -37,13 +38,15 @@ function reapplySearchFilter() {
 function applySearchFilter() {
   const input = document.getElementById('pr-search');
   if (!input) return;
-  const q = input.value.trim().toLowerCase();
+  const q = input.value.trim();
+  const lower = q.toLowerCase();
   const cards = document.querySelectorAll('.pr-card');
   const visibleByRepo = new Map();
   cards.forEach((card) => {
-    const matches = !q || (card.dataset.search || '').includes(q);
+    const matches = !lower || (card.dataset.search || '').includes(lower);
     const next = matches ? '' : 'none';
     if (card.style.display !== next) card.style.display = next;
+    highlightTitle(card, matches ? q : '');
     const repoId = card.closest('.repo-section')?.dataset.repo;
     if (repoId && matches) visibleByRepo.set(repoId, (visibleByRepo.get(repoId) || 0) + 1);
   });
@@ -54,6 +57,35 @@ function applySearchFilter() {
     const next = hasContent && !isHiddenByVisibility ? '' : 'none';
     if (section.style.display !== next) section.style.display = next;
   });
+}
+
+// Wrap matched query in <mark> inside the PR title. Restore plain title when
+// query is empty. We work off card.dataset.title (set during render) so we
+// always know the original text — querying current textContent would compound
+// previous mark wrappings.
+function highlightTitle(card, query) {
+  const titleEl = card.querySelector('.pr-title');
+  if (!titleEl) return;
+  const original = card.dataset.title;
+  if (!original) return;
+  if (!query) {
+    if (titleEl.firstElementChild) titleEl.textContent = original;
+    return;
+  }
+  const lower = original.toLowerCase();
+  const idx = lower.indexOf(query.toLowerCase());
+  if (idx < 0) {
+    if (titleEl.firstElementChild) titleEl.textContent = original;
+    return;
+  }
+  while (titleEl.firstChild) titleEl.firstChild.remove();
+  if (idx > 0) titleEl.append(document.createTextNode(original.slice(0, idx)));
+  const mark = document.createElement('mark');
+  mark.textContent = original.slice(idx, idx + query.length);
+  titleEl.append(mark);
+  if (idx + query.length < original.length) {
+    titleEl.append(document.createTextNode(original.slice(idx + query.length)));
+  }
 }
 
 function updateLastUpdatedDisplay() {
@@ -194,7 +226,14 @@ const displayLimit = new Map();
 
 function renderCardsInGrid(grid, sortedPrs, limit) {
   while (grid.firstChild) grid.firstChild.remove();
-  sortedPrs.slice(0, limit).forEach((pr) => grid.appendChild(renderPRCard(pr)));
+  sortedPrs.slice(0, limit).forEach((pr, idx) => {
+    const card = renderPRCard(pr);
+    // Cap stagger index at 11 so very-late cards don't introduce a long
+    // perceived delay. CSS uses --stagger via animation-delay (or no-op
+    // when prefers-reduced-motion is on).
+    card.style.setProperty('--stagger', String(Math.min(idx, 11)));
+    grid.appendChild(card);
+  });
 }
 
 function getSortKey() {
@@ -308,9 +347,20 @@ function renderPRCard(pr) {
   const prOwner = urlParts[0];
   const prRepo = urlParts[1];
 
-  card.addEventListener('click', (e) => {
+  card.tabIndex = 0;
+  card.setAttribute('role', 'button');
+  card.setAttribute('aria-label', `PR #${pr.number} ${pr.title}`);
+  const openPane = (e) => {
     if (e.target.closest('a')) return; // Don't intercept link clicks
+    lastDetailTrigger = card;
     openDetailPane(prOwner, prRepo, pr.number, pr.title);
+  };
+  card.addEventListener('click', openPane);
+  card.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      openPane(e);
+    }
   });
 
   // Row 1: number + title + created
@@ -327,6 +377,9 @@ function renderPRCard(pr) {
   title.target = '_blank';
   title.rel = 'noopener';
   title.textContent = pr.title;
+  // Stash the original so highlightTitle can restore / re-mark without
+  // accumulating <mark> wrappers across successive search keystrokes.
+  card.dataset.title = pr.title;
   row1Left.append(num);
   if (pr.draft) {
     const draftTag = document.createElement('span');
@@ -737,6 +790,10 @@ async function loadSingleRepo(repoId) {
     // a redundant full reconcile when the polled data matches what we just
     // displayed.
     if (lastData) lastRenderSig = renderSignature(lastData);
+    // Persist into localStorage so paintFromCache on next reload reflects the
+    // freshly-fetched repo. The SW cache is bypassed for /api/prs/repo/...
+    // anyway (different URL than /api/prs), so no SW invalidation needed.
+    if (lastData) writeCache(CACHE_KEYS.prs, lastData);
     reapplySearchFilter();
   } catch (err) {
     loadingSection.remove();
@@ -746,6 +803,7 @@ async function loadSingleRepo(repoId) {
       error: err.message,
       paused: lastDataPaused(repoId),
     });
+    if (lastData) writeCache(CACHE_KEYS.prs, lastData);
     showToast(`Failed to load ${repoId}: ${err.message}`, 'error');
   } finally {
     if (wasPolling) startPolling({ skipImmediate: true });
@@ -1222,11 +1280,22 @@ function openDetailPane(owner, repo, number, title) {
   pane.dataset.number = String(number);
   pane.dataset.title = title;
 
+  // Make the pane an actual dialog for assistive tech.
+  pane.setAttribute('role', 'dialog');
+  pane.setAttribute('aria-modal', 'true');
+  pane.setAttribute('aria-labelledby', 'detail-title');
+
   titleEl.textContent = `#${number} ${title}`;
   content.textContent = '';
 
   pane.classList.remove('hidden');
   overlay.classList.remove('hidden');
+
+  // Send focus into the pane on open (close button is the safest target —
+  // Esc-aware, no destructive side-effect on accidental Enter).
+  requestAnimationFrame(() => {
+    document.getElementById('detail-close')?.focus();
+  });
 
   sweepPaneCache();
 
@@ -1237,10 +1306,22 @@ function openDetailPane(owner, repo, number, title) {
     return;
   }
 
-  const loadingEl = document.createElement('div');
-  loadingEl.className = 'detail-loading';
-  loadingEl.textContent = 'Loading...';
-  content.appendChild(loadingEl);
+  // Skeleton: show structural placeholders so the pane has shape immediately
+  // instead of just spelling "Loading...". Replaced wholesale once data lands.
+  const skeleton = document.createElement('div');
+  skeleton.className = 'detail-skeleton';
+  skeleton.setAttribute('aria-hidden', 'true');
+  for (let i = 0; i < 4; i++) {
+    const meta = document.createElement('div');
+    meta.className = 'skeleton-block skeleton-meta';
+    skeleton.appendChild(meta);
+  }
+  for (let i = 0; i < 5; i++) {
+    const row = document.createElement('div');
+    row.className = 'skeleton-block skeleton-file';
+    skeleton.appendChild(row);
+  }
+  content.appendChild(skeleton);
 
   api
     .prDetail(owner, repo, number)
@@ -1263,6 +1344,18 @@ function openDetailPane(owner, repo, number, title) {
     });
 }
 
+// Tiny non-crypto hash (FNV-1a 32-bit) for keying caches. Cheap, no async,
+// good enough to detect content changes — we only need "did the input
+// change?", not collision resistance.
+function shortHash(str) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(36);
+}
+
 function paneContext() {
   const pane = document.getElementById('detail-pane');
   if (!pane) return null;
@@ -1270,11 +1363,26 @@ function paneContext() {
   const repo = pane.dataset.repo;
   const number = pane.dataset.number;
   if (!owner || !repo || !number) return null;
-  return { owner, repo, number, prKey: `pr:${owner}/${repo}#${number}` };
+  return { owner, repo, number };
+}
+
+// Build cache keys that embed a short content hash so the cache auto-misses
+// when the underlying PR text changes — preventing "stale 7-day-old summary"
+// situations after a PR is updated.
+function prCacheKey(ctx, detail) {
+  if (!ctx) return null;
+  const filenames = (detail?.files || []).map((f) => f.filename).join('|');
+  const sig = shortHash(`${detail?.title || ''}|${detail?.body || ''}|${filenames}`);
+  return `pr:${ctx.owner}/${ctx.repo}#${ctx.number}@${sig}`;
 }
 
 function threadCacheKey(ctx, thread) {
-  return `thread:${ctx.owner}/${ctx.repo}#${ctx.number}:${thread.path}:${thread.line ?? 0}`;
+  if (!ctx) return null;
+  const text = (thread?.comments || [])
+    .map((c) => `${c.author?.login || ''}:${c.body || ''}`)
+    .join('\n');
+  const sig = shortHash(text);
+  return `thread:${ctx.owner}/${ctx.repo}#${ctx.number}:${thread.path}:${thread.line ?? 0}@${sig}`;
 }
 
 function relativeAge(at) {
@@ -1290,12 +1398,21 @@ function renderSummaryInto(host, kind, { summary, cli, at }) {
   if (existing) existing.remove();
   const summaryEl = document.createElement('div');
   summaryEl.className = 'detail-ai-summary';
+
   const label = document.createElement('div');
   label.className = 'detail-ai-summary-label';
-  const labelText = kind === 'pr' ? 'PR Summary' : 'Summary';
-  const cached = at ? ` · ${relativeAge(at)} のキャッシュ` : '';
-  label.textContent = `${labelText} (${cli || 'AI'})${cached}`;
+  const main = document.createElement('span');
+  main.textContent = `${kind === 'pr' ? 'PR Summary' : 'Summary'} (${cli || 'AI'})`;
+  label.appendChild(main);
+  if (at) {
+    const cacheTag = document.createElement('span');
+    cacheTag.className = 'detail-ai-summary-cache';
+    cacheTag.textContent = ` · ${relativeAge(at)} のキャッシュ`;
+    cacheTag.title = 'ローカル保存の要約。最新内容は「再要約」で取得できます';
+    label.appendChild(cacheTag);
+  }
   summaryEl.appendChild(label);
+
   const body = document.createElement('div');
   body.className = 'detail-ai-summary-body';
   body.textContent = summary;
@@ -1356,7 +1473,8 @@ async function runPRSummarize(host, btn, detail) {
     summaryEl.remove();
     renderSummaryInto(host, 'pr', { summary, cli, at: null });
     const ctx = paneContext();
-    if (ctx) writeAiSummary(ctx.prKey, summary, cli);
+    const key = prCacheKey(ctx, detail);
+    if (key) writeAiSummary(key, summary, cli);
     btn.textContent = '再要約';
   } catch (err) {
     summaryEl.remove();
@@ -1370,6 +1488,14 @@ async function runPRSummarize(host, btn, detail) {
 function closeDetailPane() {
   document.getElementById('detail-pane').classList.add('hidden');
   document.getElementById('detail-overlay').classList.add('hidden');
+  // Drop TTL-expired entries on close so an idle SPA doesn't accumulate
+  // 50 stale (but TTL-fresh-when-cached) detail blobs in memory.
+  sweepPaneCache();
+  // Restore focus to whatever opened the pane (improves keyboard nav).
+  if (lastDetailTrigger && document.contains(lastDetailTrigger)) {
+    lastDetailTrigger.focus();
+    lastDetailTrigger = null;
+  }
 }
 
 function renderDetailContent(container, detail) {
@@ -1396,7 +1522,8 @@ function renderDetailContent(container, detail) {
   // immediately on reopen, without re-spending CLI time. Button label flips
   // to "再要約" so it's obvious this is regeneration vs first-time.
   const ctx = paneContext();
-  const cachedPrSummary = ctx ? readAiSummary(ctx.prKey) : null;
+  const prKey = prCacheKey(ctx, detail);
+  const cachedPrSummary = prKey ? readAiSummary(prKey) : null;
   if (cachedPrSummary) {
     renderSummaryInto(prSummaryHost, 'pr', cachedPrSummary);
   }
@@ -1776,6 +1903,11 @@ async function init() {
       // Drop from lastData immediately so a subsequent rerender (sort change,
       // visibility toggle) doesn't resurrect the deleted repo if loadPRs fails.
       removeLastDataRepo(change.removed);
+      // Persist the trimmed snapshot to localStorage and invalidate SW so
+      // a hard reload (or SW offline fallback) doesn't bring back the
+      // just-deleted repo from a stale cached /api/prs response.
+      if (lastData) writeCache(CACHE_KEYS.prs, lastData);
+      invalidateApiSwCache();
       // Repaint the dashboard from the locally-trimmed lastData first so the
       // user sees the repo disappear without a "loading" gap.
       rerenderFromLastData();
@@ -1823,6 +1955,13 @@ async function init() {
     try {
       const data = await api.refreshPrs(true);
       lastData = data;
+      // Persist + invalidate downstream caches so a hard reload right after
+      // refresh doesn't show 5-minute-old data from the SW or 1-hour-old data
+      // from localStorage. The backend POST /api/prs/refresh is not cached by
+      // the SW (POST is bypassed) but the next GET /api/prs would HIT SW
+      // cache without this.
+      writeCache(CACHE_KEYS.prs, data);
+      invalidateApiSwCache();
       rerenderFromLastData();
       hideBanner();
     } catch (err) {

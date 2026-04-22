@@ -8,7 +8,12 @@
 // errors are non-fatal (we just skip the write).
 
 const KEY_PREFIX = 'dash:';
-const DEFAULT_TTL_MS = 60 * 60 * 1000; // 1 hour
+const DEFAULT_TTL_MS = 60 * 60 * 1000; // 1 hour for low-churn keys
+
+// PR list moves quickly (poll every 60 s on the server). 15 min strikes a
+// balance: fresh enough that paintFromCache after a short away doesn't show
+// truly old data, while still surviving an offline reload.
+const PRS_TTL_MS = 15 * 60 * 1000;
 
 export const CACHE_KEYS = Object.freeze({
   me: 'me',
@@ -16,11 +21,15 @@ export const CACHE_KEYS = Object.freeze({
   prs: 'prs',
 });
 
+const TTL_BY_KEY = Object.freeze({
+  prs: PRS_TTL_MS,
+});
+
 function storageKey(key) {
   return `${KEY_PREFIX}${key}`;
 }
 
-export function readCache(key, ttlMs = DEFAULT_TTL_MS) {
+export function readCache(key, ttlMs = TTL_BY_KEY[key] ?? DEFAULT_TTL_MS) {
   try {
     const raw = localStorage.getItem(storageKey(key));
     if (!raw) return null;

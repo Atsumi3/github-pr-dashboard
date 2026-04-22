@@ -12,75 +12,6 @@
       rel="stylesheet"
     />
     <link rel="stylesheet" href="/css/style.css" />
-    <style>
-      .setup-pat-form {
-        display: flex;
-        flex-direction: column;
-        gap: 12px;
-        margin-top: 24px;
-      }
-      .setup-pat-input {
-        width: 100%;
-        height: 44px;
-        padding: 0 16px;
-        border-radius: 8px;
-        background: #2a2a2a;
-        border: 1px solid #444;
-        color: #e8e8e8;
-        font-size: 14px;
-        font-family: 'SF Mono', 'Cascadia Code', Consolas, monospace;
-        outline: none;
-        transition: border-color 150ms;
-      }
-      .setup-pat-input:focus {
-        border-color: #5c9fd4;
-        box-shadow: 0 0 0 2px rgba(92, 159, 212, 0.25);
-      }
-      .setup-pat-input::placeholder {
-        color: #666;
-      }
-      .btn-pat {
-        width: 100%;
-        height: 44px;
-        background: #333;
-        color: #e8e8e8;
-        border: 1px solid #444;
-        border-radius: 8px;
-        font-size: 14px;
-        font-weight: 500;
-        cursor: pointer;
-        transition: background 150ms;
-      }
-      .btn-pat:hover {
-        background: #444;
-      }
-      .btn-pat:disabled {
-        opacity: 0.5;
-        cursor: not-allowed;
-      }
-      .setup-pat-hint {
-        font-size: 12px;
-        color: #888;
-        line-height: 1.55;
-        text-align: center;
-        margin-top: 4px;
-      }
-      .setup-pat-hint a {
-        color: #b6e3d9;
-        text-decoration: underline;
-        text-underline-offset: 2px;
-      }
-      .setup-pat-hint a:hover {
-        color: #d8f1ea;
-      }
-      .setup-pat-hint code {
-        font-family: 'SF Mono', 'Cascadia Code', Consolas, monospace;
-        font-size: 11px;
-        padding: 1px 4px;
-        background: #2a2a2a;
-        border-radius: 3px;
-      }
-    </style>
   </head>
   <body>
     <div class="setup-page">
@@ -121,54 +52,6 @@
     </div>
     <div id="toast-container"></div>
     <script type="module" src="/js/sw-register.js"></script>
-    <script type="module">
-      import { api, getStoredToken, setStoredToken, clearStoredToken } from '/js/api.js';
-
-      // Already authenticated? Verify token still works against GitHub.
-      if (getStoredToken()) {
-        try {
-          await api.authMe();
-          window.location.href = '/';
-        } catch {
-          // Stored token is invalid/expired — clear and stay on this page.
-          clearStoredToken();
-        }
-      }
-
-      // PAT login
-      const btnPat = document.getElementById('btn-pat');
-      const patInput = document.getElementById('pat-input');
-
-      btnPat.addEventListener('click', async () => {
-        const errEl = document.getElementById('login-error');
-        errEl.classList.add('hidden');
-        const pat = patInput.value.trim();
-        if (!pat) {
-          errEl.textContent = 'Token を入力してください';
-          errEl.classList.remove('hidden');
-          return;
-        }
-
-        btnPat.disabled = true;
-        btnPat.textContent = 'Connecting...';
-
-        try {
-          // Store first so api.authMe() picks it up via the X-GitHub-Token header.
-          setStoredToken(pat);
-          await api.authMe();
-          window.location.href = '/';
-        } catch (err) {
-          clearStoredToken();
-          errEl.textContent = err.message || 'Token verification failed';
-          errEl.classList.remove('hidden');
-          btnPat.disabled = false;
-          btnPat.textContent = 'Token で接続';
-        }
-      });
-
-      patInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') btnPat.click();
-      });
-    </script>
+    <script type="module" src="/js/setup.js"></script>
   </body>
 </html>

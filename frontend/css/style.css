@@ -199,6 +199,74 @@ body {
 /* ============================
    Setup Page
    ============================ */
+.setup-pat-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 24px;
+}
+.setup-pat-input {
+  width: 100%;
+  height: 44px;
+  padding: 0 16px;
+  border-radius: 8px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  font-size: 14px;
+  font-family: var(--font-mono);
+  outline: none;
+  transition: border-color 150ms;
+}
+.setup-pat-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-dim);
+}
+.setup-pat-input::placeholder {
+  color: var(--text-muted);
+}
+.btn-pat {
+  width: 100%;
+  height: 44px;
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 150ms;
+}
+.btn-pat:hover {
+  background: var(--bg-active);
+}
+.btn-pat:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.setup-pat-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.55;
+  text-align: center;
+  margin-top: 4px;
+}
+.setup-pat-hint a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.setup-pat-hint a:hover {
+  color: var(--text-link);
+}
+.setup-pat-hint code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 1px 4px;
+  background: var(--bg-input);
+  border-radius: 3px;
+}
+
 .setup-page {
   min-height: 100vh;
   display: flex;
@@ -1262,17 +1330,42 @@ body {
 /* ============================
    PR Card
    ============================ */
+.pr-title mark {
+  background: var(--accent-dim);
+  color: var(--accent);
+  padding: 0 2px;
+  border-radius: 2px;
+}
+
 .pr-card {
   background: var(--bg-surface);
   border: 1px solid var(--border);
   border-left: 3px solid var(--accent);
   border-radius: var(--radius-md);
   padding: var(--space-5) var(--space-6);
-  transition: all var(--transition);
+  /* Subtle stagger on first paint. Other state changes use the wider
+     `transition: all` below so hover / status flips still feel snappy. */
+  animation: pr-card-in 240ms ease-out backwards;
+  animation-delay: calc(var(--stagger, 0) * 22ms);
+  transition:
+    background-color 320ms ease,
+    border-color 320ms ease,
+    transform var(--transition),
+    box-shadow var(--transition);
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
   position: relative;
+}
+@keyframes pr-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 .pr-card:hover {
   border-color: var(--border-hover);
@@ -1831,6 +1924,56 @@ body {
   inset: 0;
   background: rgba(0, 0, 0, 0.4);
   z-index: 80;
+  /* Match the pane's slide so the dim layer fades alongside the slide-in
+     instead of snapping into place. */
+  opacity: 1;
+  transition: opacity 200ms ease-out;
+}
+.detail-overlay.hidden {
+  display: block;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Skeleton placeholders shown while detail content is loading. */
+.detail-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-6);
+}
+.skeleton-block {
+  background: linear-gradient(
+    90deg,
+    var(--bg-surface) 0%,
+    var(--bg-hover) 50%,
+    var(--bg-surface) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+  border-radius: var(--radius-sm);
+}
+.skeleton-meta {
+  height: 18px;
+  width: 60%;
+}
+.skeleton-meta:nth-child(2n) {
+  width: 80%;
+}
+.skeleton-file {
+  height: 14px;
+  width: 100%;
+}
+.skeleton-file:nth-child(odd) {
+  width: 92%;
+}
+@keyframes shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
 }
 
 .detail-pane {
@@ -2083,6 +2226,12 @@ body {
   text-transform: uppercase;
   letter-spacing: 1.2px;
   margin-bottom: var(--space-2);
+}
+.detail-ai-summary-cache {
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+  opacity: 0.6;
 }
 .detail-ai-summary-body {
   color: var(--text-primary);
@@ -2441,5 +2590,21 @@ body.loading .loading-overlay {
   }
   .repo-cards {
     grid-template-columns: 1fr;
+  }
+}
+
+/* ============================
+   Reduced Motion
+   ============================
+   Respect users who request reduced motion. Aggressive blanket override on
+   every animatable property so future additions inherit the policy. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
   }
 }

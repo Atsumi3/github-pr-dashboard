@@ -38,6 +38,13 @@ function clearServiceWorkerCache() {
   controller.postMessage({ type: 'CLEAR_CACHE' });
 }
 
+// Public API for non-logout callers (e.g., explicit refresh, repo removal)
+// to drop SW-cached API responses. Matches the same CLEAR_CACHE handler in
+// sw.js so the implementation stays in one place.
+export function invalidateApiSwCache() {
+  clearServiceWorkerCache();
+}
+
 export function syncTokenToServiceWorker(token) {
   if (typeof navigator === 'undefined' || !navigator.serviceWorker) return;
   const controller = navigator.serviceWorker.controller;
