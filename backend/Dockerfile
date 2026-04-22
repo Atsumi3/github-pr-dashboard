@@ -1,4 +1,4 @@
-FROM node:22-alpine3.21
+FROM node:24-alpine3.22
 WORKDIR /app
 COPY package.json pnpm-lock.yaml ./
 # Use the corepack version bundled with the Node image; pnpm version is pinned

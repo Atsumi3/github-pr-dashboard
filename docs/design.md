@@ -39,8 +39,8 @@
 
 | サービス         | 役割                                                                                                         | ポート              | ベース            |
 | ---------------- | ------------------------------------------------------------------------------------------------------------ | ------------------- | ----------------- |
-| frontend         | 静的配信 + ServiceWorker                                                                                     | 127.0.0.1:3000 → 80 | nginx:1.27-alpine |
-| backend          | REST API、GitHub 呼び出し、永続化                                                                            | 3001 (内部のみ)     | node:22-alpine    |
+| frontend         | 静的配信 + ServiceWorker                                                                                     | 127.0.0.1:3000 → 80 | nginx:1.29-alpine |
+| backend          | REST API、GitHub 呼び出し、永続化                                                                            | 3001 (内部のみ)     | node:24-alpine    |
 | ai-server (任意) | ホスト CLI を spawn (claude/codex/gemini/chatgpt の whitelist のみ)、`AI_SHARED_SECRET` 認証、Host whitelist | 127.0.0.1:3002      | host node 20+     |
 
 ## 2. 認証設計
@@ -327,8 +327,8 @@ backend は `expose:3001` で内部のみ。frontend が `127.0.0.1:3000:80` で
 
 ### 8.3 Dockerfile
 
-- backend: node:22-alpine + corepack 同梱版で pnpm 9.15.5 (packageManager 固定)
-- frontend: nginx:1.27-alpine、entrypoint なし
+- backend: node:24-alpine + corepack 同梱版で pnpm 9.15.5 (packageManager 固定)
+- frontend: nginx:1.29-alpine、entrypoint なし
 
 ### 8.4 サプライチェーン
 
@@ -359,8 +359,8 @@ backend は `expose:3001` で内部のみ。frontend が `127.0.0.1:3000:80` で
 
 ## 11. 技術スタック
 
-- バックエンド: Node.js 22 (Docker image `node:22-alpine3.21`) + Express 4.21.2 (ランタイム依存はこれのみ)
+- バックエンド: Node.js 24 (Docker image `node:24-alpine3.22`) + Express 5.2.1 (ランタイム依存はこれのみ)
 - フロントエンド: Vanilla HTML/CSS/JS (依存ゼロ、CDN 経由 Web Font のみ)
-- 配信: nginx 1.27 (Docker image `nginx:1.27-alpine`)
+- 配信: nginx 1.29 (Docker image `nginx:1.29-alpine`)
 - ai-server: Node.js 20+ + node:child_process (依存ゼロ、ホスト上で実行)
-- 開発ツール: ESLint 9 (flat config) + Prettier (`pnpm@9.15.5`)
+- 開発ツール: ESLint 10 (flat config) + Prettier (`pnpm@9.15.5`)
