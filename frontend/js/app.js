@@ -858,7 +858,15 @@ function reconcileRepoSections(main, desiredRepos) {
   for (const node of Array.from(main.children)) {
     const id = node.dataset?.repo;
     if (id) {
-      existingByRepo.set(id, node);
+      // If two sections share the same data-repo (could happen if a transient
+      // race left an orphan loadingSection from loadSingleRepo, or any past
+      // bug), keep only the first and drop the rest. Self-healing — without
+      // this, duplicates would persist until the user manually reloaded.
+      if (existingByRepo.has(id)) {
+        node.remove();
+      } else {
+        existingByRepo.set(id, node);
+      }
     } else {
       // Drop any stray non-section node (e.g. an .empty-state div left behind
       // when the dashboard transitions from "no repos" to "has repos").
