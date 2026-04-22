@@ -1,0 +1,29 @@
+version: 2
+updates:
+  # GitHub Actions: actions are pinned by SHA in workflows (see
+  # CLAUDE.md / supply chain policy). Dependabot can still propose updates
+  # and will rewrite the SHA + version comment together.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore(actions)
+    labels:
+      - dependencies
+      - github-actions
+
+  # Root pnpm workspace. Bumps the pinned versions in package.json /
+  # backend/package.json / ai-server/package.json.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore(deps)
+    labels:
+      - dependencies
+      - npm
+    versioning-strategy: increase

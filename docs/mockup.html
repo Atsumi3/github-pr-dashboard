@@ -1,0 +1,992 @@
+<!--
+  STATUS: 設計初期のモックアップ。現行 UI とは以下のような乖離があります。
+  - サイドバーは現在「目アイコン1つ」に統合 (visibility + paused のトグル)
+  - 詳細ペインに「Failed checks」セクションと AI 要約の disclaimer
+  - ヘッダーに PR 検索 / ソート / 統計が常設
+  - Toast は同一メッセージ集約 (×N) + close ボタン + 最大 3 件
+  - PR カードに更新時の fade-in アニメは無し
+  本ファイルは設計意図 (二段カラム + パステル系カードの視覚言語) の保存目的で残しています。
+  実装の正は frontend/css/style.css と frontend/js/app.js です。
+-->
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GitHub PR Dashboard - Mockup (設計初期版)</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg-page: #1c1c1c;
+    --bg-card: #262626;
+    --bg-sidebar: #212121;
+    --bg-header: #1a1a1a;
+    --bg-input: #2a2a2a;
+    --bg-hover: #333333;
+    --bg-active: #3a3a3a;
+    --border-default: #444444;
+    --border-subtle: #333333;
+    --border-focus: #5c9fd4;
+    --text-primary: #e8e8e8;
+    --text-secondary: #999999;
+    --text-tertiary: #666666;
+    --text-link: #5c9fd4;
+    --status-approved-bg: rgba(76,175,80,0.15);
+    --status-approved-text: #a5d6a7;
+    --status-changes-bg: rgba(217,68,82,0.15);
+    --status-changes-text: #ef9a9a;
+    --status-pending-bg: rgba(230,162,60,0.15);
+    --status-pending-text: #ffe0b2;
+    --status-review-bg: rgba(153,153,153,0.15);
+    --status-review-text: #cccccc;
+    --warning-bg: rgba(230,162,60,0.1);
+    --warning-text: #ffe0b2;
+    --sidebar-width: 260px;
+    --header-height: 56px;
+  }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    background: var(--bg-page);
+    color: var(--text-primary);
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  .mono {
+    font-family: "SF Mono", "Cascadia Code", "Fira Code", Consolas, monospace;
+  }
+
+  /* ===== SETUP PAGE ===== */
+  .setup-page {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-page);
+    padding: 16px;
+  }
+
+  .setup-card {
+    width: 100%;
+    max-width: 400px;
+    background: var(--bg-card);
+    border-radius: 12px;
+    padding: clamp(24px, 5vw, 40px);
+    box-shadow: 0 4px 24px rgba(0,0,0,0.3);
+    text-align: center;
+  }
+
+  .setup-logo {
+    width: 48px;
+    height: 48px;
+    margin: 0 auto 24px;
+    background: var(--text-primary);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .setup-logo svg { width: 32px; height: 32px; }
+
+  .setup-title {
+    font-size: clamp(24px, 5vw, 32px);
+    font-weight: 700;
+    margin-bottom: 8px;
+    line-height: 1.25;
+  }
+
+  .setup-desc {
+    font-size: 14px;
+    color: var(--text-secondary);
+    margin-bottom: 24px;
+    line-height: 1.75;
+  }
+
+  .btn-github {
+    width: 100%;
+    height: 44px;
+    background: #2da44e;
+    color: #ffffff;
+    border: none;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    transition: background 150ms ease-in-out;
+  }
+
+  .btn-github:hover { background: #2c974b; }
+  .btn-github svg { width: 20px; height: 20px; fill: white; }
+
+  /* ===== DASHBOARD ===== */
+  .dashboard {
+    display: grid;
+    grid-template-columns: var(--sidebar-width) 1fr;
+    grid-template-rows: var(--header-height) 1fr;
+    height: 100vh;
+    min-height: 0;
+  }
+
+  /* ===== HEADER ===== */
+  .header {
+    grid-column: 1 / -1;
+    background: var(--bg-header);
+    border-bottom: 1px solid var(--border-default);
+    padding: 0 clamp(12px, 2vw, 24px);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: var(--header-height);
+    gap: 8px;
+  }
+
+  .header-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+  }
+
+  .hamburger {
+    display: none;
+    width: 32px;
+    height: 32px;
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    border-radius: 6px;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  .hamburger:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+  .header-logo {
+    width: 28px;
+    height: 28px;
+    background: var(--text-primary);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  .header-logo svg { width: 18px; height: 18px; }
+
+  .header-title {
+    font-size: clamp(14px, 2vw, 20px);
+    font-weight: 700;
+    white-space: nowrap;
+  }
+
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .btn-toggle {
+    height: 32px;
+    padding: 0 12px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 150ms ease-in-out;
+    border: 1px solid var(--border-default);
+    background: transparent;
+    color: var(--text-secondary);
+    white-space: nowrap;
+  }
+
+  .btn-toggle.active {
+    background: rgba(92,159,212,0.15);
+    color: var(--border-focus);
+    border-color: var(--border-focus);
+  }
+
+  .btn-secondary {
+    height: 32px;
+    padding: 0 12px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    background: var(--bg-hover);
+    color: var(--text-primary);
+    border: 1px solid var(--border-default);
+    transition: all 150ms ease-in-out;
+    white-space: nowrap;
+  }
+
+  .btn-ghost {
+    height: 32px;
+    padding: 0 8px;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+    background: transparent;
+    color: var(--text-secondary);
+    border: none;
+    transition: all 150ms ease-in-out;
+    white-space: nowrap;
+  }
+
+  .avatar {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    border: 1px solid var(--border-default);
+    background: #444;
+    flex-shrink: 0;
+  }
+
+  .avatar-sm {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    border: 1px solid var(--border-default);
+    background: #555;
+    flex-shrink: 0;
+    display: inline-block;
+    vertical-align: middle;
+  }
+
+  .user-info {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-secondary);
+    font-size: 13px;
+  }
+
+  .user-info .user-name { white-space: nowrap; }
+
+  /* ===== SIDEBAR ===== */
+  .sidebar {
+    background: var(--bg-sidebar);
+    padding: 16px;
+    overflow-y: auto;
+    border-right: 1px solid var(--border-subtle);
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .sidebar-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.5);
+    z-index: 49;
+  }
+
+  .sidebar-title {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 12px;
+  }
+
+  .sidebar-item {
+    height: 36px;
+    padding: 0 12px;
+    border-radius: 6px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    cursor: pointer;
+    transition: all 150ms ease-in-out;
+    margin-bottom: 2px;
+  }
+
+  .sidebar-item:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+  .sidebar-item.active {
+    background: var(--bg-active);
+    color: var(--text-primary);
+    border-left: 2px solid var(--border-focus);
+    padding-left: 10px;
+  }
+
+  .sidebar-item .delete-btn {
+    font-size: 11px;
+    color: var(--text-tertiary);
+    opacity: 0;
+    transition: opacity 150ms;
+    cursor: pointer;
+    background: none;
+    border: none;
+    padding: 2px 4px;
+  }
+
+  .sidebar-item:hover .delete-btn { opacity: 1; }
+
+  .sidebar-search {
+    position: relative;
+    margin-bottom: 12px;
+  }
+
+  .sidebar-search input {
+    width: 100%;
+    height: 36px;
+    padding: 0 12px 0 32px;
+    border-radius: 6px;
+    background: var(--bg-input);
+    border: 1px solid var(--border-default);
+    color: var(--text-primary);
+    font-size: 13px;
+    outline: none;
+    transition: all 150ms ease-in-out;
+  }
+
+  .sidebar-search input::placeholder { color: var(--text-tertiary); }
+
+  .sidebar-search input:focus {
+    border-color: var(--border-focus);
+    box-shadow: 0 0 0 2px rgba(92,159,212,0.25);
+  }
+
+  .sidebar-search .search-icon {
+    position: absolute;
+    left: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--text-tertiary);
+    font-size: 14px;
+    pointer-events: none;
+  }
+
+  .search-dropdown {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    background: var(--bg-card);
+    border: 1px solid var(--border-default);
+    border-top: none;
+    border-radius: 0 0 6px 6px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    z-index: 10;
+    max-height: 280px;
+    overflow-y: auto;
+  }
+
+  .search-result {
+    padding: 10px 12px;
+    cursor: pointer;
+    transition: background 150ms;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .search-result:last-child { border-bottom: none; }
+  .search-result:hover { background: var(--bg-hover); }
+
+  .search-result-name { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+
+  .search-result-desc {
+    font-size: 11px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-top: 2px;
+  }
+
+  .search-result-meta { font-size: 11px; color: var(--text-tertiary); font-weight: 500; margin-top: 2px; }
+
+  .sidebar-bottom {
+    margin-top: auto;
+    padding-top: 12px;
+  }
+
+  /* Settings panel */
+  .settings-panel {
+    border-top: 1px solid var(--border-default);
+    padding: 16px 0 0;
+  }
+
+  .settings-title { font-size: 13px; font-weight: 600; color: var(--text-primary); margin-bottom: 12px; }
+  .settings-field { margin-bottom: 12px; }
+  .settings-label { font-size: 11px; color: var(--text-secondary); margin-bottom: 4px; }
+  .settings-value { font-size: 11px; color: var(--text-tertiary); }
+
+  .settings-input {
+    width: 80px;
+    height: 28px;
+    padding: 0 8px;
+    border-radius: 4px;
+    background: var(--bg-input);
+    border: 1px solid var(--border-default);
+    color: var(--text-primary);
+    font-size: 13px;
+    outline: none;
+  }
+
+  .settings-unit { font-size: 12px; color: var(--text-secondary); margin-left: 4px; }
+
+  .btn-save {
+    height: 28px;
+    padding: 0 16px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    background: var(--bg-hover);
+    color: var(--text-primary);
+    border: 1px solid var(--border-default);
+    margin-top: 8px;
+  }
+
+  /* ===== MAIN ===== */
+  .main {
+    background: var(--bg-page);
+    padding: clamp(16px, 3vw, 32px);
+    overflow-y: auto;
+    min-height: 0;
+  }
+
+  /* Banner */
+  .banner {
+    padding: 12px 16px;
+    border-radius: 6px;
+    font-size: 13px;
+    margin-bottom: 24px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .banner-warning {
+    background: var(--warning-bg);
+    border-left: 3px solid #e6a23c;
+    color: var(--warning-text);
+  }
+
+  .banner-icon { flex-shrink: 0; }
+
+  /* Repo section */
+  .repo-section { margin-bottom: 24px; }
+
+  .repo-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 12px;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .repo-name {
+    font-size: clamp(16px, 2vw, 20px);
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+
+  .repo-updated { font-size: 11px; color: var(--text-tertiary); white-space: nowrap; }
+
+  /* ===== PR CARD (flexible) ===== */
+  .pr-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    padding: clamp(12px, 2vw, 16px);
+    margin-bottom: 12px;
+    transition: all 150ms ease-in-out;
+    cursor: default;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .pr-card:hover { border-color: var(--border-default); background: #2a2a2a; }
+
+  .pr-row1 {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .pr-row1-left {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    min-width: 0;
+    flex: 1 1 0;
+  }
+
+  .pr-number { font-size: 13px; font-weight: 500; color: var(--text-secondary); flex-shrink: 0; }
+
+  .pr-title {
+    font-size: clamp(14px, 1.5vw, 16px);
+    font-weight: 600;
+    color: var(--text-link);
+    cursor: pointer;
+    text-decoration: none;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+
+  .pr-title:hover { text-decoration: underline; }
+
+  .pr-created { font-size: 11px; color: var(--text-tertiary); flex-shrink: 0; margin-left: auto; }
+
+  .pr-row2 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .pr-branch {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    background: var(--bg-hover);
+    padding: 2px 8px;
+    border-radius: 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+  }
+
+  .pr-updated { font-size: 11px; color: var(--text-tertiary); white-space: nowrap; margin-left: auto; }
+
+  .pr-row3 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .pr-row3-left {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    flex-wrap: wrap;
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .pr-author { display: flex; align-items: center; gap: 4px; color: var(--text-secondary); white-space: nowrap; }
+  .pr-arrow { color: var(--text-tertiary); font-size: 11px; }
+  .pr-assignee { display: flex; align-items: center; gap: 4px; color: var(--text-primary); white-space: nowrap; }
+  .pr-no-assignee { color: var(--text-tertiary); font-style: italic; font-size: 13px; white-space: nowrap; }
+
+  /* Review badge */
+  .badge {
+    height: 24px;
+    padding: 0 8px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 500;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    white-space: nowrap;
+    flex-shrink: 0;
+    margin-left: auto;
+  }
+
+  .badge-approved { background: var(--status-approved-bg); color: var(--status-approved-text); }
+  .badge-changes { background: var(--status-changes-bg); color: var(--status-changes-text); }
+  .badge-pending { background: var(--status-pending-bg); color: var(--status-pending-text); }
+  .badge-review { background: var(--status-review-bg); color: var(--status-review-text); }
+  .badge-icon { font-size: 12px; line-height: 1; }
+
+  /* Empty state */
+  .empty-state {
+    text-align: center;
+    padding: 24px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+  }
+
+  .empty-state p { font-size: 13px; color: var(--text-tertiary); }
+
+  /* Toast */
+  .toast {
+    position: fixed;
+    top: 16px;
+    right: 16px;
+    max-width: min(360px, calc(100vw - 32px));
+    padding: 12px 16px;
+    border-radius: 8px;
+    background: var(--bg-hover);
+    border: 1px solid var(--border-default);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    font-size: 13px;
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    z-index: 200;
+  }
+
+  .toast-icon { color: var(--status-approved-text); flex-shrink: 0; }
+
+  /* Page separator */
+  .page-separator {
+    width: 100%;
+    text-align: center;
+    padding: 40px 0;
+    background: #111;
+    color: var(--text-tertiary);
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    border-top: 2px dashed var(--border-default);
+    border-bottom: 2px dashed var(--border-default);
+  }
+
+  /* ==============================
+     RESPONSIVE: Tablet (< 1024px)
+     ============================== */
+  @media (max-width: 1023px) {
+    .dashboard {
+      grid-template-columns: 1fr;
+    }
+
+    .hamburger { display: flex; }
+
+    .sidebar {
+      position: fixed;
+      top: var(--header-height);
+      left: 0;
+      bottom: 0;
+      width: 280px;
+      z-index: 50;
+      transform: translateX(-100%);
+      transition: transform 200ms ease-out;
+      border-right: 1px solid var(--border-default);
+    }
+
+    .sidebar.open { transform: translateX(0); }
+
+    .sidebar-overlay.open {
+      display: block;
+    }
+  }
+
+  /* ==============================
+     RESPONSIVE: Mobile (< 768px)
+     ============================== */
+  @media (max-width: 767px) {
+    :root {
+      --header-height: 48px;
+    }
+
+    .header-title { display: none; }
+
+    .header-right .user-name { display: none; }
+
+    .header-right {
+      gap: 6px;
+    }
+
+    .btn-toggle, .btn-secondary, .btn-ghost {
+      height: 28px;
+      padding: 0 8px;
+      font-size: 12px;
+    }
+
+    .pr-title {
+      white-space: normal;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+    }
+
+    .pr-row3 {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 6px;
+    }
+
+    .badge {
+      margin-left: 0;
+    }
+
+    .repo-name { font-size: 16px; }
+
+    .sidebar { width: 260px; }
+  }
+
+  /* ==============================
+     RESPONSIVE: Wide (>= 1440px)
+     ============================== */
+  @media (min-width: 1440px) {
+    :root {
+      --sidebar-width: 280px;
+    }
+
+    .main {
+      max-width: 1200px;
+    }
+  }
+</style>
+</head>
+<body>
+
+<!-- ===== SETUP PAGE ===== -->
+<div class="setup-page" id="setup">
+  <div class="setup-card">
+    <div class="setup-logo">
+      <svg viewBox="0 0 16 16" fill="currentColor" style="color:#1c1c1c">
+        <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
+      </svg>
+    </div>
+    <div class="setup-title">GitHub PR Dashboard</div>
+    <div class="setup-desc">
+      GitHub アカウントでログインして<br>
+      PR の監視を始めましょう
+    </div>
+    <button class="btn-github">
+      <svg viewBox="0 0 16 16">
+        <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
+      </svg>
+      GitHub でログイン
+    </button>
+  </div>
+</div>
+
+<div class="page-separator">-- Dashboard View --</div>
+
+<!-- ===== DASHBOARD ===== -->
+<div class="dashboard" id="dashboard">
+  <header class="header">
+    <div class="header-left">
+      <button class="hamburger" onclick="toggleSidebar()">
+        <svg width="20" height="20" viewBox="0 0 16 16" fill="currentColor"><path d="M1 2.75A.75.75 0 011.75 2h12.5a.75.75 0 010 1.5H1.75A.75.75 0 011 2.75zm0 5A.75.75 0 011.75 7h12.5a.75.75 0 010 1.5H1.75A.75.75 0 011 7.75zM1.75 12h12.5a.75.75 0 010 1.5H1.75a.75.75 0 010-1.5z"/></svg>
+      </button>
+      <div class="header-logo">
+        <svg viewBox="0 0 16 16" fill="currentColor" style="color:#1c1c1c;width:18px;height:18px">
+          <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
+        </svg>
+      </div>
+      <span class="header-title">GitHub PR Dashboard</span>
+    </div>
+    <div class="header-right">
+      <button class="btn-toggle">Assigned to me</button>
+      <button class="btn-secondary">Refresh</button>
+      <div class="user-info">
+        <img class="avatar" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24'%3E%3Crect fill='%23555' width='24' height='24' rx='12'/%3E%3Ctext x='12' y='16' text-anchor='middle' fill='%23e8e8e8' font-size='12' font-family='sans-serif'%3EO%3C/text%3E%3C/svg%3E" alt="">
+        <span class="user-name">octocat</span>
+      </div>
+      <button class="btn-ghost">Logout</button>
+    </div>
+  </header>
+
+  <div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleSidebar()"></div>
+
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-title">Repositories</div>
+
+    <div class="sidebar-search">
+      <span class="search-icon">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M11.5 7a4.5 4.5 0 1 1-9 0 4.5 4.5 0 0 1 9 0zm-.82 4.74a6 6 0 1 1 1.06-1.06l3.04 3.04a.75.75 0 1 1-1.06 1.06l-3.04-3.04z"/></svg>
+      </span>
+      <input type="text" placeholder="Search repositories..." value="react">
+      <div class="search-dropdown">
+        <div class="search-result">
+          <div class="search-result-name">facebook/react</div>
+          <div class="search-result-desc">A declarative, efficient, and flexible JavaScript library for building user interfaces</div>
+          <div class="search-result-meta">Public</div>
+        </div>
+        <div class="search-result">
+          <div class="search-result-name">reactjs/react-modal</div>
+          <div class="search-result-desc">Accessible modal dialog component for React</div>
+          <div class="search-result-meta">Public</div>
+        </div>
+        <div class="search-result">
+          <div class="search-result-name">preactjs/preact</div>
+          <div class="search-result-desc">Fast 3kB React alternative with the same modern API</div>
+          <div class="search-result-meta">Public</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="sidebar-item active">
+      <span>vercel/next.js</span>
+      <button class="delete-btn" style="opacity:0">x</button>
+    </div>
+    <div class="sidebar-item">
+      <span>facebook/react</span>
+      <button class="delete-btn">x</button>
+    </div>
+    <div class="sidebar-item">
+      <span>microsoft/vscode</span>
+      <button class="delete-btn" style="opacity:0">x</button>
+    </div>
+
+    <div class="sidebar-bottom">
+      <div class="settings-panel">
+        <div class="settings-title">Settings</div>
+        <div class="settings-field">
+          <div class="settings-label">Poll interval</div>
+          <input class="settings-input" type="number" value="300">
+          <span class="settings-unit">sec</span>
+        </div>
+        <button class="btn-save">Save</button>
+      </div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="banner banner-warning">
+      <span class="banner-icon">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8.22 1.754a.25.25 0 00-.44 0L1.698 13.132a.25.25 0 00.22.368h12.164a.25.25 0 00.22-.368L8.22 1.754zm-1.763-.707c.659-1.234 2.427-1.234 3.086 0l6.082 11.378A1.75 1.75 0 0114.082 15H1.918a1.75 1.75 0 01-1.543-2.575L6.457 1.047zM9 11a1 1 0 11-2 0 1 1 0 012 0zm-.25-5.25a.75.75 0 00-1.5 0v2.5a.75.75 0 001.5 0v-2.5z"/></svg>
+      </span>
+      API rate limit approaching. Cached data is being displayed.
+    </div>
+
+    <div class="repo-section">
+      <div class="repo-header">
+        <span class="repo-name">vercel/next.js</span>
+        <span class="repo-updated">Updated 2 min ago</span>
+      </div>
+
+      <div class="pr-card">
+        <div class="pr-row1">
+          <div class="pr-row1-left">
+            <span class="pr-number">#74521</span>
+            <a class="pr-title" href="#">Add server actions streaming support</a>
+          </div>
+          <span class="pr-created">2 days ago</span>
+        </div>
+        <div class="pr-row2">
+          <span class="pr-branch mono">feature/server-actions-streaming</span>
+          <span class="pr-updated">Updated 1h ago</span>
+        </div>
+        <div class="pr-row3">
+          <div class="pr-row3-left">
+            <span class="pr-author"><span class="avatar-sm" style="background:#6a7"></span> timneutkens</span>
+            <span class="pr-arrow">&rarr;</span>
+            <span class="pr-assignee"><span class="avatar-sm" style="background:#67a"></span> leerob</span>
+          </div>
+          <span class="badge badge-approved"><span class="badge-icon">&#10003;</span> Approved</span>
+        </div>
+      </div>
+
+      <div class="pr-card">
+        <div class="pr-row1">
+          <div class="pr-row1-left">
+            <span class="pr-number">#74498</span>
+            <a class="pr-title" href="#">Fix middleware redirect loop on edge runtime</a>
+          </div>
+          <span class="pr-created">3 days ago</span>
+        </div>
+        <div class="pr-row2">
+          <span class="pr-branch mono">fix/middleware-redirect</span>
+          <span class="pr-updated">Updated 30m ago</span>
+        </div>
+        <div class="pr-row3">
+          <div class="pr-row3-left">
+            <span class="pr-author"><span class="avatar-sm" style="background:#a76"></span> shuding</span>
+            <span class="pr-arrow">&rarr;</span>
+            <span class="pr-assignee"><span class="avatar-sm" style="background:#76a"></span> huozhi</span>
+          </div>
+          <span class="badge badge-changes"><span class="badge-icon">&#10007;</span> Changes Requested</span>
+        </div>
+      </div>
+
+      <div class="pr-card">
+        <div class="pr-row1">
+          <div class="pr-row1-left">
+            <span class="pr-number">#74475</span>
+            <a class="pr-title" href="#">Update turbopack to latest canary</a>
+          </div>
+          <span class="pr-created">5 days ago</span>
+        </div>
+        <div class="pr-row2">
+          <span class="pr-branch mono">chore/turbopack-update</span>
+          <span class="pr-updated">Updated 5h ago</span>
+        </div>
+        <div class="pr-row3">
+          <div class="pr-row3-left">
+            <span class="pr-author"><span class="avatar-sm" style="background:#7a6"></span> sokra</span>
+            <span class="pr-arrow">&rarr;</span>
+            <span class="pr-assignee"><span class="avatar-sm" style="background:#a67"></span> feedthejim</span>
+          </div>
+          <span class="badge badge-pending"><span class="badge-icon">&#9719;</span> Pending</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="repo-section">
+      <div class="repo-header">
+        <span class="repo-name">facebook/react</span>
+        <span class="repo-updated">Updated 5 min ago</span>
+      </div>
+      <div class="pr-card">
+        <div class="pr-row1">
+          <div class="pr-row1-left">
+            <span class="pr-number">#31205</span>
+            <a class="pr-title" href="#">Implement use() hook for promises</a>
+          </div>
+          <span class="pr-created">1 week ago</span>
+        </div>
+        <div class="pr-row2">
+          <span class="pr-branch mono">feature/use-hook</span>
+          <span class="pr-updated">Updated 2d ago</span>
+        </div>
+        <div class="pr-row3">
+          <div class="pr-row3-left">
+            <span class="pr-author"><span class="avatar-sm" style="background:#6a9"></span> acdlite</span>
+            <span class="pr-arrow">&rarr;</span>
+            <span class="pr-no-assignee">Unassigned</span>
+          </div>
+          <span class="badge badge-review"><span class="badge-icon">&#9903;</span> Review Required</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="repo-section">
+      <div class="repo-header">
+        <span class="repo-name">microsoft/vscode</span>
+        <span class="repo-updated">Updated 5 min ago</span>
+      </div>
+      <div class="empty-state"><p>No open PRs</p></div>
+    </div>
+  </main>
+</div>
+
+<div class="toast">
+  <span class="toast-icon">
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 16A8 8 0 108 0a8 8 0 000 16zm3.78-9.72a.75.75 0 00-1.06-1.06L6.75 9.19 5.28 7.72a.75.75 0 00-1.06 1.06l2 2a.75.75 0 001.06 0l4.5-4.5z"/></svg>
+  </span>
+  facebook/react added to watch list
+</div>
+
+<script>
+function toggleSidebar() {
+  document.getElementById('sidebar').classList.toggle('open');
+  document.getElementById('sidebarOverlay').classList.toggle('open');
+}
+</script>
+</body>
+</html>

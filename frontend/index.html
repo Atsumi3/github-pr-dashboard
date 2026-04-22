@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GitHub PR Dashboard</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/css/style.css" />
+  </head>
+  <body>
+    <div class="dashboard">
+      <header class="header">
+        <div class="header-left">
+          <button id="btn-hamburger" class="hamburger" aria-label="Toggle sidebar">
+            <svg width="20" height="20" viewBox="0 0 16 16" fill="currentColor">
+              <path
+                d="M1 2.75A.75.75 0 011.75 2h12.5a.75.75 0 010 1.5H1.75A.75.75 0 011 2.75zm0 5A.75.75 0 011.75 7h12.5a.75.75 0 010 1.5H1.75A.75.75 0 011 7.75zM1.75 12h12.5a.75.75 0 010 1.5H1.75a.75.75 0 010-1.5z"
+              />
+            </svg>
+          </button>
+          <div class="header-logo">
+            <svg viewBox="0 0 16 16" fill="currentColor" class="header-logo-svg">
+              <path
+                d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"
+              />
+            </svg>
+          </div>
+          <span class="header-title">GitHub PR Dashboard</span>
+        </div>
+        <div class="header-right">
+          <div id="header-stats" class="header-stats"></div>
+          <div class="header-search">
+            <input id="pr-search" type="text" placeholder="Search PRs..." autocomplete="off" />
+          </div>
+          <select id="pr-sort" class="header-sort" aria-label="Sort PRs">
+            <option value="status">Sort: Status</option>
+            <option value="updated">Sort: Updated</option>
+            <option value="created">Sort: Created</option>
+            <option value="behind">Sort: Behind</option>
+          </select>
+          <div class="user-info">
+            <img id="user-avatar" class="avatar" src="" alt="" />
+            <span id="user-name" class="user-name"></span>
+          </div>
+          <button id="btn-logout" class="btn-ghost">Logout</button>
+        </div>
+      </header>
+
+      <div id="sidebar-overlay" class="sidebar-overlay"></div>
+
+      <aside id="sidebar" class="sidebar">
+        <div class="sidebar-title">Repositories</div>
+        <div class="sidebar-search">
+          <span class="search-icon">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+              <path
+                d="M11.5 7a4.5 4.5 0 1 1-9 0 4.5 4.5 0 0 1 9 0zm-.82 4.74a6 6 0 1 1 1.06-1.06l3.04 3.04a.75.75 0 1 1-1.06 1.06l-3.04-3.04z"
+              />
+            </svg>
+          </span>
+          <input
+            id="repo-search"
+            type="text"
+            placeholder="Search repositories..."
+            autocomplete="off"
+          />
+          <div id="search-dropdown" class="search-dropdown hidden"></div>
+        </div>
+        <div id="repo-list"></div>
+        <div class="sidebar-bottom">
+          <div class="settings-panel">
+            <div class="settings-title">Auto-refresh</div>
+            <div
+              id="poll-presets"
+              class="poll-presets"
+              role="radiogroup"
+              aria-label="Auto-refresh interval"
+            >
+              <button type="button" class="poll-preset" data-seconds="30">30s</button>
+              <button type="button" class="poll-preset" data-seconds="60">1m</button>
+              <button type="button" class="poll-preset" data-seconds="180">3m</button>
+              <button type="button" class="poll-preset" data-seconds="300">5m</button>
+              <button type="button" class="poll-preset" data-seconds="600">10m</button>
+            </div>
+            <div class="refresh-status">
+              <span id="last-updated" class="last-updated">--</span>
+              <button
+                id="btn-refresh"
+                class="btn-refresh-now"
+                aria-label="Refresh all repositories"
+                title="全リポジトリを即時再取得します。GitHub API への負荷が高いので、特定リポジトリだけなら各セクションの ⟳ ボタンを使ってください"
+              >
+                即時更新
+              </button>
+            </div>
+          </div>
+          <div class="ai-panel">
+            <div class="ai-panel-header">
+              <span class="settings-title">AI Summary</span>
+              <button
+                id="btn-ai-settings"
+                class="btn-ai-settings"
+                type="button"
+                aria-label="AI 設定を開く"
+              >
+                設定
+              </button>
+            </div>
+            <div id="ai-status-list" class="ai-status-list">
+              <div class="ai-status-loading">読み込み中…</div>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      <main class="main">
+        <div id="pr-content"></div>
+      </main>
+
+      <div id="detail-overlay" class="detail-overlay hidden"></div>
+      <aside id="detail-pane" class="detail-pane hidden">
+        <div class="detail-header">
+          <button id="detail-close" class="btn-ghost detail-close-btn" aria-label="Close">
+            &#x2715;
+          </button>
+          <span id="detail-title" class="detail-title"></span>
+        </div>
+        <div id="detail-content" class="detail-content"></div>
+      </aside>
+    </div>
+
+    <div id="loading-overlay" class="loading-overlay hidden">
+      <div class="loading-spinner">
+        <div class="loading-spinner-ring"></div>
+        <div class="loading-spinner-text" id="loading-text">Loading...</div>
+      </div>
+    </div>
+    <div id="toast-container"></div>
+    <script type="module" src="/js/sw-register.js"></script>
+    <script type="module" src="/js/app.js"></script>
+  </body>
+</html>
