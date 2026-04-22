@@ -1759,16 +1759,27 @@ function hideBanner() {
 
 let pollingCallId = 0;
 
-async function startPolling({ skipImmediate = false } = {}) {
+// Polling cadence when the tab is in the background. Long enough to keep
+// rate-limit consumption negligible (12 req/h per repo), short enough that
+// `detectChangesAndNotify` can still fire native browser notifications for
+// PRs that arrive while the user is on another tab.
+const BACKGROUND_POLL_MS = 5 * 60 * 1000;
+
+async function startPolling({ skipImmediate = false, intervalMs = null } = {}) {
   stopPolling();
   // Tag this invocation; if a newer startPolling races us across the
   // `await api.settings()` (e.g. visibilitychange + loadSingleRepo finally),
   // the older call must drop its setInterval to avoid leaking a duplicate.
   const callId = ++pollingCallId;
   try {
-    const settings = await api.settings();
-    if (callId !== pollingCallId) return;
-    const interval = settings.pollInterval * 1000;
+    let interval;
+    if (intervalMs != null) {
+      interval = intervalMs; // background mode bypasses the user's setting
+    } else {
+      const settings = await api.settings();
+      if (callId !== pollingCallId) return;
+      interval = settings.pollInterval * 1000;
+    }
     if (!skipImmediate) await loadPRs();
     if (callId !== pollingCallId) return;
     pollTimer = setInterval(loadPRs, interval);
@@ -1776,7 +1787,7 @@ async function startPolling({ skipImmediate = false } = {}) {
     if (callId !== pollingCallId) return;
     if (!skipImmediate) await loadPRs();
     if (callId !== pollingCallId) return;
-    pollTimer = setInterval(loadPRs, 60_000);
+    pollTimer = setInterval(loadPRs, intervalMs ?? 60_000);
   }
 }
 
@@ -1787,12 +1798,15 @@ function stopPolling() {
   }
 }
 
-// Page Visibility API — pause both the data poller and the per-second
-// "last updated" timer when the tab isn't visible to avoid background CPU.
+// Page Visibility API. The "last updated" UI timer stops when the tab is
+// hidden (no point spending CPU updating an invisible label), but the data
+// poller switches to a slow background cadence instead of fully stopping —
+// otherwise PRs that arrive while the user is on another tab go undetected
+// and detectChangesAndNotify can never fire a native browser notification.
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
-    stopPolling();
     stopLastUpdatedTimer();
+    startPolling({ skipImmediate: true, intervalMs: BACKGROUND_POLL_MS });
   } else {
     startLastUpdatedTimer();
     updateLastUpdatedDisplay();
