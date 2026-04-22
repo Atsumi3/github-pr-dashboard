@@ -524,6 +524,56 @@ function pickLabelTextColor(hex) {
   return luminance > 0.6 ? '#000000' : '#ffffff';
 }
 
+// Map a backend repo-fetch error into a human label that makes the cause
+// obvious. The previous "Repository inaccessible" was misleading because
+// GitHub-side 5xx (transient) and 4xx (real permission problems) both produced
+// the same message — users assumed they had a permission issue when GitHub was
+// just being flaky.
+function describeRepoError(error) {
+  if (!error) return null;
+  // Backwards compat: error used to be a bare string.
+  const message = typeof error === 'string' ? error : error.message;
+  const status = typeof error === 'object' ? error.status : null;
+  if (status === 401) {
+    return {
+      tag: 'Auth error',
+      body: '認証に失敗しました',
+      severity: 'permanent',
+      tooltip: message,
+    };
+  }
+  if (status === 403) {
+    return {
+      tag: 'Rate limited',
+      body: 'GitHub のレート制限に達しています',
+      severity: 'transient',
+      tooltip: message,
+    };
+  }
+  if (status === 404) {
+    return {
+      tag: 'Not found',
+      body: 'リポジトリが見つからないか、アクセス権がありません',
+      severity: 'permanent',
+      tooltip: message,
+    };
+  }
+  if (status >= 500 && status < 600) {
+    return {
+      tag: 'GitHub error',
+      body: `GitHub が一時的に応答していません (HTTP ${status})。自動リトライ中…`,
+      severity: 'transient',
+      tooltip: message,
+    };
+  }
+  return {
+    tag: 'Fetch error',
+    body: message || 'PR 取得に失敗',
+    severity: 'permanent',
+    tooltip: message,
+  };
+}
+
 function renderRepoSection(repoData) {
   const section = document.createElement('div');
   section.className = 'repo-section';
@@ -537,11 +587,13 @@ function renderRepoSection(repoData) {
   name.textContent = repoData.repo;
   header.appendChild(name);
 
-  if (repoData.error) {
+  const errorInfo = describeRepoError(repoData.error);
+  if (errorInfo) {
     const warn = document.createElement('span');
     warn.className = 'repo-updated';
-    warn.style.color = '#d94452';
-    warn.textContent = 'Access error';
+    warn.style.color = errorInfo.severity === 'transient' ? '#e6a23c' : '#d94452';
+    warn.textContent = errorInfo.tag;
+    warn.title = errorInfo.tooltip;
     header.appendChild(warn);
   }
 
@@ -560,7 +612,7 @@ function renderRepoSection(repoData) {
     const empty = document.createElement('div');
     empty.className = 'empty-state';
     const p = document.createElement('p');
-    p.textContent = repoData.error ? 'Repository inaccessible' : 'No open PRs';
+    p.textContent = errorInfo ? errorInfo.body : 'No open PRs';
     empty.appendChild(p);
     section.appendChild(empty);
   } else {

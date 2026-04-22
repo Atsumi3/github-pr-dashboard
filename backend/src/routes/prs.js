@@ -67,10 +67,14 @@ export async function fetchAllPRs(token) {
           // transient 5xx. Users see slightly stale data instead of an empty
           // section until the next successful poll.
           const prev = previousByRepo.get(repo.id);
+          // Carry the HTTP status so the frontend can distinguish "your token
+          // can't see this repo" (4xx) from "GitHub itself is having a bad
+          // moment" (5xx) — the previous generic "Repository inaccessible"
+          // misled users into thinking they had a permission problem.
           return {
             repo: repo.id,
             prs: prev?.prs || [],
-            error: err.message,
+            error: { message: err.message, status: err.status || null },
           };
         }
       }),
