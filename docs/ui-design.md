@@ -331,23 +331,26 @@
 ### 4.7 トースト通知
 
 ```
-┌──────────────────────────────────────┐
-│ ⓘ owner/repo を監視リストに追加しました  │
-└──────────────────────────────────────┘
+┌─────────────────────────────────────────────┐
+│ ⓘ owner/repo を監視リストに追加しました   ×   │
+└─────────────────────────────────────────────┘
 ```
 
-| プロパティ | 値                                                     |
-| ---------- | ------------------------------------------------------ |
-| 位置       | 画面右上、上から space-4 (16px)、右から space-4 (16px) |
-| 幅         | 最大 360px                                             |
-| パディング | space-3 space-4 (12px 16px)                            |
-| 角丸       | 8px                                                    |
-| 背景       | #333333                                                |
-| ボーダー   | 1px solid #444444                                      |
-| 影         | 0 4px 12px rgba(0,0,0,0.3)                             |
-| フォント   | text-sm                                                |
-| 自動消去   | 5秒後にフェードアウト                                  |
-| 複数表示   | 縦に space-2 (8px) 間隔でスタック                      |
+| プロパティ         | 値                                                                                       |
+| ------------------ | ---------------------------------------------------------------------------------------- |
+| 位置               | 画面右上、上から space-4 (16px)、右から space-4 (16px)                                   |
+| 幅                 | 最大 360px                                                                               |
+| パディング         | space-3 space-4 (12px 16px)                                                              |
+| 角丸               | 8px                                                                                      |
+| 背景               | #333333                                                                                  |
+| ボーダー           | 1px solid #444444                                                                        |
+| 影                 | 0 4px 12px rgba(0,0,0,0.3)                                                               |
+| フォント           | text-sm                                                                                  |
+| 自動消去           | 5秒後にフェードアウト (close ボタンで即時消去可)                                         |
+| 複数表示           | 縦に space-2 (8px) 間隔でスタック、**最大 3 件**                                         |
+| 同一メッセージ集約 | 同じ文字列が連続発火したら新しい toast を作らず `×N` バッジで件数を更新し TTL をリセット |
+| close ボタン       | 右端に `×`、ghost スタイル、`aria-label="Close"`                                         |
+| ARIA               | `role="alert"` (error 種別) / `aria-live="polite" or "assertive"`                        |
 
 ### 4.8 バナー (警告・エラー)
 
@@ -406,8 +409,18 @@
 #### リポジトリ項目
 
 ```
-  owner/repo1  [x]
+  [👁]  owner/repo1                       [x]
+       (eye open = active / eye closed = paused)
 ```
+
+各リポジトリ行は以下の要素を持つ。
+
+| 要素                | 説明                                                                                                                    |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| 目アイコン (toggle) | 「表示+ポーリング」のオン/オフを atomic に切替。クリック → backend `setRepoPaused` → `pauseChanged` 通知 → 即時 UI 反映 |
+| リポジトリ名        | 中央。paused 時は `text-decoration: line-through` + opacity 0.55 で視覚的に弱める                                       |
+| 削除 (x)            | 通常非表示、ホバー時に表示                                                                                              |
+| 行クリック          | 該当 PR セクションへスクロール。paused なら自動的にトグルをオンにしてからスクロール                                     |
 
 | プロパティ    | 値                                                                  |
 | ------------- | ------------------------------------------------------------------- |
@@ -419,13 +432,16 @@
 | ホバー        | 背景 bg-hover, テキスト text-primary, 削除ボタン(x) を表示          |
 | 選択中        | 背景 bg-active, テキスト text-primary, 左ボーダー 2px solid #5c9fd4 |
 | 削除ボタン(x) | 通常時は非表示、ホバー時に表示。Ghost ボタンスタイル                |
+| 目アイコン    | accent 色 (active) / text-muted + opacity 0.5 (paused)              |
+| 状態          | backend の `paused` フラグが唯一の真実源 (旧 localStorage は廃止)   |
 
 ### 4.11 ヘッダー
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│ [Logo] GitHub PR Dashboard      [自分のみ] [更新] [avatar] octocat [Logout] │
-└──────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ [Logo] GitHub PR Dashboard   Total: 12  Need review: 3  Mine: 4  Approved: 5 │
+│                              [Search PRs...] [Sort: Status ▾] [avatar] [Logout] │
+└──────────────────────────────────────────────────────────────────────────────┘
 ```
 
 | プロパティ     | 値                                                           |
@@ -437,6 +453,16 @@
 | レイアウト     | flexbox: justify-content: space-between, align-items: center |
 | ロゴ横テキスト | text-xl, font-bold, text-primary                             |
 | ユーザー名     | text-sm, text-secondary                                      |
+
+#### ヘッダー要素詳細
+
+| 要素            | 説明                                                                                               |
+| --------------- | -------------------------------------------------------------------------------------------------- |
+| Stats           | Total / Need review / Mine / Approved の 4 カウンタ。値が変化したら **flash** (accent 色 800ms)    |
+| `.last-updated` | 「Updated Xs ago」+ 状態ドット。ポーリング成功時に **pulse flash** (700ms scale 拡大、accent 色)   |
+| PR 検索         | `#pr-search`、200ms debounce、入力中は title/branch/author に対する filter。全件除外時は空状態表示 |
+| ソート          | `#pr-sort` (Status / Updated / Created / Behind)。変更時は再 fetch せず lastData から再描画        |
+| 即時更新        | サイドバー下の「即時更新」(global refresh)、または各 repo セクションの ⟳ (per-repo refresh)        |
 
 ### 4.12 設定パネル
 
@@ -463,6 +489,73 @@
 | 見出し         | text-sm, font-semibold, text-primary |
 | ラベル         | text-xs, text-secondary              |
 | 入力フィールド | 幅 80px、数値入力                    |
+
+### 4.13 詳細ペイン (右スライドイン)
+
+PR タイトルクリックで開く右側ドロワー。
+
+```
+┌────────────────────────────────────────┐
+│ × #123 Implement caching for X         │ ← header
+├────────────────────────────────────────┤
+│ [Open in GitHub]  [PR全体をAIで要約]    │ ← actionRow
+│                                        │
+│ ┌─ AI summary ────────────────────┐    │
+│ │ ・要約 1                         │    │
+│ │ ・要約 2                         │    │
+│ │ -- LLM disclaimer --             │    │
+│ └──────────────────────────────────┘    │
+│                                        │
+│ Changes                                │
+│ Files | Branch | +/- | Merge | vs base │
+│                                        │
+│ Failed checks (2)                      │
+│ ┌─ failure / lint   12s ago →─┐         │
+│ ┌─ failure / build  1m ago  →─┐         │
+│                                        │
+│ Files (5)                              │
+│  M  src/foo.js  +12 -3                 │
+│  ...                                   │
+│                                        │
+│ Unresolved comments (1)                │
+│  src/foo.js:42  AIで要約                │
+│  ...                                   │
+└────────────────────────────────────────┘
+```
+
+| プロパティ     | 値                                                                                             |
+| -------------- | ---------------------------------------------------------------------------------------------- |
+| 幅             | min(560px, 90vw) (>=2560px は 680px、>=3840px は 820px)                                        |
+| 開く           | `transform: translateX(100%) → translateX(0)`、`200ms ease-out`                                |
+| 閉じる         | `transform: translateX(0) → translateX(100%)`、`200ms ease-out` (display は維持して対称アニメ) |
+| オーバーレイ   | `opacity 0 ↔ 1` を 200ms で連動、`pointer-events: none` で操作も遮断                          |
+| 閉じるトリガー | × ボタン / オーバーレイクリック / Esc                                                          |
+| フォーカス管理 | 開いた時は閉じるボタンへ。閉じた時は呼び出し元 (lastDetailTrigger) へ復帰                      |
+| 役割属性       | `role="dialog"`, `aria-modal="true"`, `aria-labelledby="detail-title"`                         |
+
+#### Failed checks セクション
+
+| 要素        | 説明                                                                                       |
+| ----------- | ------------------------------------------------------------------------------------------ |
+| バッジ      | `Failure` / `Timed out` / `Cancelled` / `Action required` / `Startup failure` / `Error`    |
+| 名前        | `<workflow> / <name>` の形式 (workflow が無ければ name のみ)                               |
+| description | StatusContext の場合のみ二次表示                                                           |
+| 完了時刻    | 相対表示                                                                                   |
+| リンク先    | `detailsUrl` / `targetUrl` (Actions ログや CI サービスのページ) — URL がある行はリンク化   |
+| バッジ色    | 背景 `var(--status-changes)` (赤系)、テキスト白                                            |
+| 取得失敗時  | バッジを出さず「Failed checks: 取得失敗」+ 詳細メッセージのみ表示                          |
+| 表示条件    | 失敗が 1 件以上、または取得失敗時のみ。成功 / pending のみのときはセクション自体を出さない |
+
+#### AI 要約セクション
+
+| 要素       | 説明                                                                                           |
+| ---------- | ---------------------------------------------------------------------------------------------- |
+| ラベル     | `PR Summary (claude)` のように CLI 名を付与。キャッシュからの場合は `· N分前のキャッシュ` 付き |
+| 本文       | テキスト要約 (整形なし)                                                                        |
+| disclaimer | 「LLM による要約です。重要な判断の前に必ず原文を確認してください。」を **常時表示**            |
+| 取得中     | スピナー + 「AI で要約中...」                                                                  |
+| ボタン     | `PR全体をAIで要約` → `要約中...` → `再要約`                                                    |
+| キャッシュ | localStorage `dash:ai:*`、PR 内容の短縮ハッシュをキーに含めて自動 invalidation (TTL 7 日)      |
 
 ## 5. 画面別レイアウト
 
@@ -613,11 +706,17 @@ transition: all 150ms ease-in-out;
 キーボードナビゲーション用。全フォーカス可能要素に適用:
 
 ```css
-outline: 2px solid #5c9fd4;
-outline-offset: 2px;
+:focus-visible {
+  outline: 2px solid var(--accent); /* mint accent */
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px rgba(0, 0, 0, 0.55); /* outer halo */
+}
+.pr-card:focus-visible {
+  outline-color: #ffffff; /* status 色背景でも白で明示 */
+}
 ```
 
-マウスクリック時は :focus-visible のみに適用し、:focus では表示しない。
+二重リング (outline + box-shadow halo) でステータス色 (Approved 緑など) の薄い背景でも見失わないようにする。マウスクリック時は `:focus-visible` のみに適用し、`:focus` では表示しない。
 
 ### 6.4 アクティブ状態
 
@@ -674,11 +773,11 @@ PR データ取得中にスケルトンスクリーンを表示する。
 
 ### 6.6 サイドバー開閉 (タブレット以下)
 
-| プロパティ   | 値                                          |
-| ------------ | ------------------------------------------- |
-| 開く         | transform: translateX(0), 200ms ease-out    |
-| 閉じる       | transform: translateX(-100%), 200ms ease-in |
-| オーバーレイ | opacity 0 → 1, 200ms                        |
+| プロパティ   | 値                                                                               |
+| ------------ | -------------------------------------------------------------------------------- |
+| 開く         | transform: translateX(0), 200ms ease-out                                         |
+| 閉じる       | transform: translateX(-100%), 200ms ease-in (display は維持して対称化)           |
+| オーバーレイ | display: block を保ったまま opacity 0 ↔ 1 を 200ms、`pointer-events` で操作遮断 |
 
 ### 6.7 トースト通知
 
@@ -686,7 +785,8 @@ PR データ取得中にスケルトンスクリーンを表示する。
 | ---------- | ------------------------------------------------------------ |
 | 出現       | transform: translateX(100%) → translateX(0), 300ms ease-out  |
 | 消去       | opacity: 1 → 0, 300ms ease-in + transform: translateY(-10px) |
-| 表示時間   | 5秒                                                          |
+| 表示時間   | 5秒 (close ボタンで即時消去可)                               |
+| バッジ更新 | 同一メッセージ集約時は `×N` バッジを上書きし TTL リセット    |
 
 ### 6.8 ドロップダウン (検索結果)
 
@@ -741,3 +841,34 @@ PR データ取得中にスケルトンスクリーンを表示する。
 | メッセージ | text-sm, text-tertiary, 中央寄せ |
 | カード背景 | bg-card                          |
 | パディング | space-6 (24px)                   |
+
+#### PR 検索で全件除外時
+
+```
+┌──────────────────────────────┐
+│  No PRs match "<query>"      │
+└──────────────────────────────┘
+```
+
+| プロパティ | 値                                       |
+| ---------- | ---------------------------------------- |
+| 配置       | `#pr-content` 直下、リポセクションの後   |
+| 表示条件   | `q` が非空 かつ visible カード合計が 0   |
+| スタイル   | text-sm, text-muted, font-mono, 中央寄せ |
+
+### 6.11 ポーリング更新フィードバック
+
+ユーザーが直接トリガーしない polling 成功時、PR カード本体は **再描画しない** (チラつき防止)。代わりにヘッダーで以下のサブテルなフィードバックを行う。
+
+| 対象                   | アニメーション                                                                     |
+| ---------------------- | ---------------------------------------------------------------------------------- |
+| `.last-updated` ドット | `just-updated-flash` 700ms ease-out (scale 1→2→1、accent → status-approved に遷移) |
+| `.header-stat-value`   | 値が変化したセルのみ `stat-flash` 800ms ease-out (accent 色 + text-shadow)         |
+| PR カード              | **アニメなし** (hover 時の transform/box-shadow transition のみ)                   |
+
+### 6.12 ソート / Load more の状態保持
+
+| 操作               | 挙動                                                                                |
+| ------------------ | ----------------------------------------------------------------------------------- |
+| ソート変更         | `lastData` から再描画。`requestAnimationFrame` でメインエリアのスクロール位置を復元 |
+| Load more クリック | 追加分の先頭 PR カードへ `focus()` を移譲し、Tab 順序が body に飛ばないようにする   |

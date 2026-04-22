@@ -1,9 +1,19 @@
+<!--
+  STATUS: 設計初期のモックアップ。現行 UI とは以下のような乖離があります。
+  - サイドバーは現在「目アイコン1つ」に統合 (visibility + paused のトグル)
+  - 詳細ペインに「Failed checks」セクションと AI 要約の disclaimer
+  - ヘッダーに PR 検索 / ソート / 統計が常設
+  - Toast は同一メッセージ集約 (×N) + close ボタン + 最大 3 件
+  - PR カードに更新時の fade-in アニメは無し
+  本ファイルは設計意図 (二段カラム + パステル系カードの視覚言語) の保存目的で残しています。
+  実装の正は frontend/css/style.css と frontend/js/app.js です。
+-->
 <!DOCTYPE html>
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>GitHub PR Dashboard - Mockup</title>
+<title>GitHub PR Dashboard - Mockup (設計初期版)</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
 
