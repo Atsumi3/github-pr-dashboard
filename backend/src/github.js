@@ -548,7 +548,7 @@ async function fetchUnresolvedThreads(token, owner, repo, number) {
       }));
     return { items, error: null };
   } catch (err) {
-    console.warn(`fetchUnresolvedThreads failed for ${owner}/${repo}#${number}:`, err.message);
+    console.warn(`fetchUnresolvedThreads failed for ${owner}/${repo}#${number}: ${err.message}`);
     return { items: [], error: err.message || 'fetch failed' };
   }
 }
@@ -688,7 +688,7 @@ async function fetchPRChecks(token, owner, repo, number) {
       .filter(Boolean);
     return { rollupState: rollup.state || null, failed, error: null };
   } catch (err) {
-    console.warn(`fetchPRChecks failed for ${owner}/${repo}#${number}:`, err.message);
+    console.warn(`fetchPRChecks failed for ${owner}/${repo}#${number}: ${err.message}`);
     return { rollupState: null, failed: [], error: err.message || 'fetch failed' };
   }
 }
@@ -727,7 +727,7 @@ async function fetchPRConflictFiles(token, repoFullName, mergeBaseSha, baseRef, 
     }
     return conflicts;
   } catch (err) {
-    console.warn(`fetchPRConflictFiles failed for ${repoFullName}:`, err.message);
+    console.warn(`fetchPRConflictFiles failed for ${repoFullName}: ${err.message}`);
     return null;
   }
 }

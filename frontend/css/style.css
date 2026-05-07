@@ -2591,12 +2591,16 @@ button.detail-check:hover {
 .detail-conflict-banner-header:hover .detail-conflict-banner-title {
   text-decoration: underline;
 }
+/* caret / icon / title share font-size + line-height so they sit on the same
+   baseline. Title uses uppercase + tracking like .detail-section-title;
+   caret and icon are aria-hidden glyphs that just need to align with it. */
 .detail-conflict-banner-caret {
   flex-shrink: 0;
   color: var(--status-changes);
   width: 12px;
   text-align: center;
-  font-size: var(--text-sm);
+  font-size: var(--text-xs);
+  line-height: 1;
 }
 .detail-conflict-banner-body {
   display: flex;
@@ -2604,7 +2608,7 @@ button.detail-check:hover {
   gap: var(--space-3);
 }
 .detail-conflict-banner-icon {
-  font-size: var(--text-xl);
+  font-size: var(--text-xs);
   line-height: 1;
   color: var(--status-changes);
 }

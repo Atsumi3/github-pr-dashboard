@@ -4,6 +4,7 @@ import * as cache from '../cache.js';
 import * as detailCache from '../detailCache.js';
 import * as github from '../github.js';
 import { ERROR_CODES, mapGithubError, sendError } from '../httpError.js';
+import { validateOwnerName } from '../repoId.js';
 import { tokenHash } from '../tokenHash.js';
 
 const router = Router();
@@ -213,6 +214,9 @@ router.get('/api/prs', async (req, res) => {
 
 router.get('/api/prs/repo/:owner/:repo', async (req, res) => {
   const { owner, repo } = req.params;
+  if (!validateOwnerName(owner, repo)) {
+    return sendError(res, 400, ERROR_CODES.INVALID_REQUEST, 'Invalid owner/repo');
+  }
   const me = await resolveMe(req.token, req.query.assignee);
   const repoId = `${owner}/${repo}`;
 
@@ -235,6 +239,14 @@ router.get('/api/prs/repo/:owner/:repo', async (req, res) => {
 router.get('/api/prs/:owner/:repo/:number', async (req, res) => {
   const { owner, repo } = req.params;
   const number = parseInt(req.params.number, 10);
+
+  // owner/repo flow into upstream `${API_BASE}/repos/${owner}/${repo}/...`
+  // URLs without per-fetch encoding. Constrain them to the GitHub-allowed
+  // identifier alphabet at the boundary so neither path traversal (..) nor
+  // host-component tricks can reshape the outbound URL.
+  if (!validateOwnerName(owner, repo) || !Number.isFinite(number) || number <= 0) {
+    return sendError(res, 400, ERROR_CODES.INVALID_REQUEST, 'Invalid owner/repo/number');
+  }
 
   if (!req.query.noCache) {
     const cached = detailCache.get(owner, repo, number);
