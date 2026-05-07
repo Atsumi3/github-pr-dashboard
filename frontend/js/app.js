@@ -384,12 +384,12 @@ function renderPRCard(pr) {
   else if (pr.state === 'closed') cardClass += ' pr-closed';
 
   // My review status — categorised so the badge reflects what *I* said.
-  // pr.reviews comes from latestOpinionatedReviews (latest non-COMMENTED per
-  // user), so a single login appears at most once. Falls back to the most
-  // recent entry if the API ever returns multiple.
+  // viewerLatestReviewState is the GraphQL `viewerLatestReview` field which,
+  // unlike pr.reviews (latestOpinionatedReviews), includes COMMENTED. So a
+  // user who only commented still gets a self-badge, and we can detect the
+  // "commented → re-review pending" combination.
   const me = window.__ME__;
-  const myReview = me && pr.reviews ? pr.reviews.filter((r) => r.login === me) : [];
-  const myReviewState = myReview.length > 0 ? myReview[myReview.length - 1].state : null;
+  const myReviewState = pr.viewerLatestReviewState || null;
   const isReReviewRequested =
     me && pr.requestedReviewers && pr.requestedReviewers.some((r) => r.login === me);
   const hasReviewed = !!myReviewState;
@@ -451,6 +451,17 @@ function renderPRCard(pr) {
     const tag = document.createElement('span');
     tag.className = 'pr-status-tag pr-tag-rerequest';
     tag.textContent = 'Re-review';
+    // Surface the prior state on hover so the reviewer can tell whether
+    // they're being re-pinged after a soft "Commented" or after a more
+    // committal Approve / Changes-request.
+    const priorLabel = {
+      APPROVED: 'Approved',
+      CHANGES_REQUESTED: 'Changes requested',
+      COMMENTED: 'Commented',
+      DISMISSED: 'Dismissed',
+      PENDING: 'Pending',
+    }[myReviewState];
+    if (priorLabel) tag.title = `前回: ${priorLabel}`;
     row1Left.appendChild(tag);
   } else if (hasReviewed) {
     // State-specific badge so reviewer can scan their own intent without
@@ -989,6 +1000,7 @@ function repoSignature(r) {
       (pr.assignees || []).map((a) => a.login).join(','),
       (pr.requestedReviewers || []).map((r) => r.login).join(','),
       (pr.reviews || []).map((rv) => `${rv.login}:${rv.state}`).join(','),
+      pr.viewerLatestReviewState || '',
       (pr.labels || []).map((l) => l.name).join(','),
     ]),
   });

@@ -120,6 +120,12 @@ const OPEN_PRS_QUERY = `
               author { login avatarUrl }
             }
           }
+          # Includes COMMENTED reviews — latestOpinionatedReviews omits them,
+          # so this is the only way to surface "I commented and a re-review
+          # was then requested" without scanning the full review timeline.
+          viewerLatestReview {
+            state
+          }
           commits(last: 1) {
             nodes {
               commit {
@@ -177,6 +183,12 @@ const SEARCH_PRS_QUERY = `
               state
               author { login avatarUrl }
             }
+          }
+          # Includes COMMENTED reviews — latestOpinionatedReviews omits them,
+          # so this is the only way to surface "I commented and a re-review
+          # was then requested" without scanning the full review timeline.
+          viewerLatestReview {
+            state
           }
           commits(last: 1) {
             nodes {
@@ -289,6 +301,10 @@ function mapPrNode(pr) {
     requestedReviewers,
     reviewStatus,
     reviews,
+    // Latest review by the *viewer*, including COMMENTED — frontend uses this
+    // to label self-review badges accurately even when the latest action was
+    // just a comment (which latestOpinionatedReviews would drop).
+    viewerLatestReviewState: pr.viewerLatestReview?.state || null,
     ciStatus,
     mergeable,
     mergeableState,
