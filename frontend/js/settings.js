@@ -183,8 +183,35 @@ export async function renderRepoList(onRepoChange) {
       span.textContent = r.id;
       div.appendChild(span);
 
+      // "Ready to merge" approval threshold pill. Clicking opens the inline
+      // stepper so it's discoverable and adjustable without leaving the
+      // sidebar context. Default (no override) renders as "≥3" in muted tone
+      // so it's clearly distinguishable from a per-repo override.
+      const approvalsPill = document.createElement('button');
+      approvalsPill.type = 'button';
+      approvalsPill.className = 'repo-approvals-pill';
+      const renderApprovalsLabel = (n, isDefault) => {
+        approvalsPill.textContent = `≥${n}`;
+        approvalsPill.classList.toggle('is-default', isDefault);
+        approvalsPill.title = isDefault
+          ? `Ready-to-merge は既定 ${n} approvals。クリックで変更`
+          : `Ready-to-merge は ${n} approvals (オーバーライド)。クリックで変更`;
+      };
+      renderApprovalsLabel(r.requiredApprovals ?? 3, r.requiredApprovals == null);
+      approvalsPill.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openApprovalsPopover(approvalsPill, r, renderApprovalsLabel, onRepoChange);
+      });
+      div.appendChild(approvalsPill);
+
       div.addEventListener('click', async (e) => {
-        if (e.target.closest('.repo-visibility-btn') || e.target.closest('.delete-btn')) return;
+        if (
+          e.target.closest('.repo-visibility-btn') ||
+          e.target.closest('.delete-btn') ||
+          e.target.closest('.repo-approvals-pill') ||
+          e.target.closest('.approvals-popover')
+        )
+          return;
         // Resume first so the section exists by the time we try to scroll.
         if (!active) await setActive(true);
         const target = document.querySelector(`.repo-section[data-repo="${r.id}"]`);
@@ -217,6 +244,141 @@ export async function renderRepoList(onRepoChange) {
     div.textContent = 'Failed to load';
     list.appendChild(div);
   }
+}
+
+// Inline popover anchored next to the threshold pill. A stepper-only UX is
+// the right primitive: the value range is small (1..10), the user almost
+// always wants ±1 from default, and a popover keeps the click target inside
+// the sidebar instead of opening a modal dialog.
+function openApprovalsPopover(anchor, repo, renderLabel, onRepoChange) {
+  // Close any popover that may already be open so we don't stack them.
+  document.querySelectorAll('.approvals-popover').forEach((el) => el.remove());
+
+  const pop = document.createElement('div');
+  pop.className = 'approvals-popover';
+  pop.setAttribute('role', 'dialog');
+  pop.setAttribute('aria-label', `${repo.id} の Ready-to-merge approvals`);
+
+  let value = repo.requiredApprovals ?? 3;
+  let isOverride = repo.requiredApprovals != null;
+
+  const row = document.createElement('div');
+  row.className = 'approvals-popover-row';
+
+  const dec = document.createElement('button');
+  dec.type = 'button';
+  dec.textContent = '−';
+  dec.className = 'approvals-step';
+  const num = document.createElement('span');
+  num.className = 'approvals-value';
+  const inc = document.createElement('button');
+  inc.type = 'button';
+  inc.textContent = '+';
+  inc.className = 'approvals-step';
+
+  const updateNum = () => {
+    num.textContent = value;
+    dec.disabled = value <= 1;
+    inc.disabled = value >= 10;
+  };
+  updateNum();
+
+  row.append(dec, num, inc);
+  pop.appendChild(row);
+
+  const status = document.createElement('div');
+  status.className = 'approvals-popover-status';
+  const renderStatus = () => {
+    status.textContent = isOverride ? `${repo.id} のみ ${value}` : `既定 (${value})`;
+  };
+  renderStatus();
+  pop.appendChild(status);
+
+  const actions = document.createElement('div');
+  actions.className = 'approvals-popover-actions';
+  const resetBtn = document.createElement('button');
+  resetBtn.type = 'button';
+  resetBtn.className = 'approvals-popover-reset';
+  resetBtn.textContent = '既定に戻す';
+  resetBtn.disabled = !isOverride;
+  const saveBtn = document.createElement('button');
+  saveBtn.type = 'button';
+  saveBtn.className = 'approvals-popover-save';
+  saveBtn.textContent = '保存';
+  actions.append(resetBtn, saveBtn);
+  pop.appendChild(actions);
+
+  document.body.appendChild(pop);
+
+  // Anchor under the pill, right-aligned. Keeps it inside the viewport even
+  // when the sidebar is at minimum width.
+  const rect = anchor.getBoundingClientRect();
+  pop.style.position = 'fixed';
+  pop.style.top = `${rect.bottom + 6}px`;
+  pop.style.left = `${Math.max(8, rect.right - pop.offsetWidth)}px`;
+
+  const close = () => {
+    pop.remove();
+    document.removeEventListener('click', onDoc, true);
+    document.removeEventListener('keydown', onKey, true);
+  };
+  const onDoc = (e) => {
+    if (pop.contains(e.target) || anchor.contains(e.target)) return;
+    close();
+  };
+  const onKey = (e) => {
+    if (e.key === 'Escape') close();
+  };
+  document.addEventListener('click', onDoc, true);
+  document.addEventListener('keydown', onKey, true);
+
+  dec.addEventListener('click', () => {
+    if (value > 1) {
+      value -= 1;
+      isOverride = true;
+      resetBtn.disabled = false;
+      updateNum();
+      renderStatus();
+    }
+  });
+  inc.addEventListener('click', () => {
+    if (value < 10) {
+      value += 1;
+      isOverride = true;
+      resetBtn.disabled = false;
+      updateNum();
+      renderStatus();
+    }
+  });
+  resetBtn.addEventListener('click', () => {
+    value = 3;
+    isOverride = false;
+    updateNum();
+    renderStatus();
+    resetBtn.disabled = true;
+  });
+  saveBtn.addEventListener('click', async () => {
+    const [owner, name] = repo.id.split('/');
+    try {
+      await api.setRepoRequiredApprovals(owner, name, isOverride ? value : null);
+      // Reflect on the local repo object so a subsequent re-open shows the
+      // new state without waiting for renderRepoList.
+      if (isOverride) repo.requiredApprovals = value;
+      else delete repo.requiredApprovals;
+      renderLabel(value, !isOverride);
+      showToast(
+        isOverride
+          ? `${repo.id} の Ready-to-merge を ${value} に設定`
+          : `${repo.id} の Ready-to-merge を既定に戻しました`,
+      );
+      onRepoChange({
+        approvalsChanged: { repo: repo.id, requiredApprovals: isOverride ? value : null },
+      });
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+    close();
+  });
 }
 
 export function initSettings() {

@@ -45,6 +45,8 @@ export const api = {
   removeRepo: (owner, name) => request('DELETE', `/api/repos/${owner}/${name}`),
   setRepoPaused: (owner, name, paused) =>
     request('PATCH', `/api/repos/${owner}/${name}`, { paused }),
+  setRepoRequiredApprovals: (owner, name, requiredApprovals) =>
+    request('PATCH', `/api/repos/${owner}/${name}`, { requiredApprovals }),
   searchRepos: (q) => request('GET', `/api/repos/search?q=${encodeURIComponent(q)}`),
   prs: (assignee) => request('GET', assignee ? '/api/prs?assignee=me' : '/api/prs'),
   prsForRepo: (owner, repo, assignee) =>
