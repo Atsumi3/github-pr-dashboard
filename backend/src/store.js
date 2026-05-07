@@ -79,6 +79,23 @@ export async function setRepoPaused(id, paused) {
   return true;
 }
 
+// Per-repo override of how many APPROVED reviews count as "ready to merge".
+// `n` is a positive integer; passing `null` clears the override so the
+// global default (DEFAULT_REQUIRED_APPROVALS in github.js / app.js) applies.
+export async function setRepoRequiredApprovals(id, n) {
+  const config = await load();
+  const repo = config.repos.find((r) => r.id === id);
+  if (!repo) return false;
+  if (n === null || n === undefined) {
+    delete repo.requiredApprovals;
+  } else {
+    repo.requiredApprovals = n;
+  }
+  await save(config);
+  reposVersion++;
+  return true;
+}
+
 export async function getSettings() {
   const config = await load();
   return config.settings;

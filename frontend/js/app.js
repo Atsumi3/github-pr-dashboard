@@ -30,6 +30,23 @@ let previousPRState = null; // Map of "repo#number" -> { reviewStatus, exists }
 let lastFetchAt = 0; // timestamp (ms) of the most recent loadPRs() invocation
 let lastData = null; // most recent /api/prs response, kept for client-side re-render
 const VISIBILITY_REFETCH_THRESHOLD = 30_000; // skip immediate refetch if within 30s
+// Default # of APPROVED reviews that mark a PR as "ready to merge". Per-repo
+// override comes through repoData.requiredApprovals; null/undefined here.
+const DEFAULT_REQUIRED_APPROVALS = 3;
+// Persist Ready-group expand state per repo across re-renders so a poll tick
+// doesn't re-collapse a section the user just opened.
+const readyGroupOpen = new Map();
+function approvedCount(pr) {
+  return (pr.reviews || []).filter((r) => r.state === 'APPROVED').length;
+}
+function isReadyToMerge(pr, threshold) {
+  if (pr.draft) return false;
+  if (pr.state !== 'open') return false;
+  // Block-listed states never count: a Changes-Requested PR can have stale
+  // approvals piled up from before the request.
+  if (pr.reviewStatus === 'CHANGES_REQUESTED') return false;
+  return approvedCount(pr) >= threshold;
+}
 
 function rerenderFromLastData() {
   if (!lastData?.repos) return;
@@ -366,12 +383,16 @@ function renderPRCard(pr) {
   else if (pr.state === 'merged') cardClass += ' pr-merged';
   else if (pr.state === 'closed') cardClass += ' pr-closed';
 
-  // My review status
+  // My review status — categorised so the badge reflects what *I* said.
+  // pr.reviews comes from latestOpinionatedReviews (latest non-COMMENTED per
+  // user), so a single login appears at most once. Falls back to the most
+  // recent entry if the API ever returns multiple.
   const me = window.__ME__;
   const myReview = me && pr.reviews ? pr.reviews.filter((r) => r.login === me) : [];
+  const myReviewState = myReview.length > 0 ? myReview[myReview.length - 1].state : null;
   const isReReviewRequested =
     me && pr.requestedReviewers && pr.requestedReviewers.some((r) => r.login === me);
-  const hasReviewed = myReview.length > 0;
+  const hasReviewed = !!myReviewState;
 
   if (hasReviewed && isReReviewRequested) cardClass += ' pr-rerequested';
   else if (hasReviewed) cardClass += ' pr-reviewed';
@@ -432,10 +453,21 @@ function renderPRCard(pr) {
     tag.textContent = 'Re-review';
     row1Left.appendChild(tag);
   } else if (hasReviewed) {
-    const tag = document.createElement('span');
-    tag.className = 'pr-status-tag pr-tag-reviewed';
-    tag.textContent = 'Reviewed';
-    row1Left.appendChild(tag);
+    // State-specific badge so reviewer can scan their own intent without
+    // opening the PR. DISMISSED (rare; usually after force-push) intentionally
+    // shows no badge — treated as "not yet reviewed again".
+    const badgeForState = {
+      APPROVED: { cls: 'pr-tag-self-approved', text: 'Approved by you' },
+      CHANGES_REQUESTED: { cls: 'pr-tag-self-changes', text: 'Changes by you' },
+      COMMENTED: { cls: 'pr-tag-self-commented', text: 'Commented by you' },
+    };
+    const info = badgeForState[myReviewState];
+    if (info) {
+      const tag = document.createElement('span');
+      tag.className = `pr-status-tag ${info.cls}`;
+      tag.textContent = info.text;
+      row1Left.appendChild(tag);
+    }
   }
   row1Left.appendChild(title);
   const meta = document.createElement('div');
@@ -743,7 +775,14 @@ function renderRepoSection(repoData) {
     empty.appendChild(p);
     section.appendChild(empty);
   } else {
-    const sorted = sortPRs(repoData.prs, getSortKey());
+    // Split off "ready to merge" PRs into a collapsed sub-group so the active
+    // queue stays focused on items still needing attention. The reviewer can
+    // expand the group to act on (or unblock) the merged-by-others pile.
+    const threshold = repoData.requiredApprovals ?? DEFAULT_REQUIRED_APPROVALS;
+    const ready = repoData.prs.filter((pr) => isReadyToMerge(pr, threshold));
+    const active = repoData.prs.filter((pr) => !isReadyToMerge(pr, threshold));
+
+    const sorted = sortPRs(active, getSortKey());
     const grid = document.createElement('div');
     grid.className = 'repo-cards';
     section.appendChild(grid);
@@ -774,9 +813,57 @@ function renderRepoSection(repoData) {
       });
       section.appendChild(loadMore);
     }
+
+    if (ready.length > 0) {
+      section.appendChild(renderReadyGroup(repoData.repo, ready, threshold));
+    }
   }
 
   return section;
+}
+
+function renderReadyGroup(repoId, readyPRs, threshold) {
+  const wrap = document.createElement('div');
+  wrap.className = 'ready-group';
+
+  const isOpen = readyGroupOpen.get(repoId) === true;
+  const header = document.createElement('button');
+  header.type = 'button';
+  header.className = 'ready-group-header';
+  header.setAttribute('aria-expanded', String(isOpen));
+
+  const caret = document.createElement('span');
+  caret.className = 'ready-group-caret';
+  caret.setAttribute('aria-hidden', 'true');
+  caret.textContent = isOpen ? '▾' : '▸';
+
+  const label = document.createElement('span');
+  label.className = 'ready-group-label';
+  label.textContent = `Ready to merge (≥ ${threshold} approvals)`;
+
+  const count = document.createElement('span');
+  count.className = 'ready-group-count';
+  count.textContent = readyPRs.length;
+
+  header.append(caret, label, count);
+  wrap.appendChild(header);
+
+  const body = document.createElement('div');
+  body.className = 'ready-group-body';
+  body.style.display = isOpen ? '' : 'none';
+  const sorted = sortPRs(readyPRs, getSortKey());
+  renderCardsInGrid(body, sorted, sorted.length);
+  wrap.appendChild(body);
+
+  header.addEventListener('click', () => {
+    const next = !(readyGroupOpen.get(repoId) === true);
+    readyGroupOpen.set(repoId, next);
+    header.setAttribute('aria-expanded', String(next));
+    caret.textContent = next ? '▾' : '▸';
+    body.style.display = next ? '' : 'none';
+  });
+
+  return wrap;
 }
 
 async function loadSingleRepo(repoId) {
@@ -891,6 +978,7 @@ function repoSignature(r) {
     repo: r.repo,
     paused: r.paused,
     error: r.error,
+    requiredApprovals: r.requiredApprovals ?? null,
     prs: (r.prs || []).map((pr) => [
       pr.number,
       pr.draft,
@@ -2754,6 +2842,17 @@ async function init() {
           // loadSingleRepo handles its own errors via toast/banner.
           loadSingleRepo(change.pauseChanged.repo);
         }
+      }
+      return;
+    }
+
+    // Threshold-only change is a pure re-bucket: same data, new partition.
+    // Patch lastData and re-render without hitting the network.
+    if (change.approvalsChanged) {
+      const target = lastData?.repos?.find((r) => r.repo === change.approvalsChanged.repo);
+      if (target) {
+        target.requiredApprovals = change.approvalsChanged.requiredApprovals;
+        rerenderFromLastData();
       }
       return;
     }

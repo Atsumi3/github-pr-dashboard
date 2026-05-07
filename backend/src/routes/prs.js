@@ -186,6 +186,9 @@ async function buildResponse(data, me) {
       // last-known PRs for one polling cycle until cache.upsertRepo runs.
       prs: paused ? [] : cached ? cached.prs : [],
       error: paused ? null : cached ? cached.error : null,
+      // Per-repo override of "ready to merge" approval threshold; null/undefined
+      // tells the frontend to use its default (DEFAULT_REQUIRED_APPROVALS).
+      requiredApprovals: w.requiredApprovals ?? null,
     };
   });
   if (me) {
