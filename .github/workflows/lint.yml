@@ -15,7 +15,7 @@ jobs:
       # Pinned to commit SHA per supply-chain policy. Tag is left as a comment
       # so Renovate / Dependabot can keep them in sync.
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       - name: Setup pnpm
         uses: pnpm/action-setup@8b2eead6074fefa43a68bf4c9e0f03ea4126b5ba # v6.0.3
