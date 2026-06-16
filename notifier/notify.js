@@ -1,8 +1,7 @@
 import { execFile, spawn } from 'node:child_process';
-import { readFile, writeFile, mkdir, appendFile, access } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, appendFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
 
 const execFileP = promisify(execFile);
@@ -14,8 +13,6 @@ const STATE_PATH = join(DATA_DIR, 'notifier-state.json');
 const LOG_PATH = join(DATA_DIR, 'notifier.log');
 const REVIEWS_DIR = join(DATA_DIR, 'reviews');
 const CONFIG_PATH = join(SCRIPT_DIR, 'notifier.config.json');
-const APPLET_PATH = join(DATA_DIR, 'PR Dashboard.app');
-const APPLET_EXEC = join(APPLET_PATH, 'Contents', 'MacOS', 'applet');
 
 const DEFAULT_CONFIG = {
   cli: 'claude',
@@ -25,7 +22,12 @@ const DEFAULT_CONFIG = {
   reviewTimeoutMs: 120000,
   repoFilter: [],
   searchLimit: 50,
+  openUrl: 'http://localhost:3000',
 };
+
+// URL opened when a notification is clicked (terminal-notifier -open). Set from
+// config in main(); the default keeps notify() working if called before then.
+let notifyOpenUrl = DEFAULT_CONFIG.openUrl;
 
 // "Data only" framing + a fenced block (USER_DATA markers) so the CLI treats
 // the diff as material to review, not as instructions to execute. Same defense
@@ -102,32 +104,25 @@ function osaEscape(s) {
     .replace(/[\r\n]+/g, ' ');
 }
 
-async function appletAvailable() {
-  try {
-    await access(APPLET_EXEC);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 async function notify(title, body) {
-  // Prefer the branded applet (built by install.sh) so the notification is
-  // attributed to "PR Dashboard" instead of the node binary. The applet reads
-  // a payload file (line 1 = title, rest = body) delivered via `open`.
-  if (await appletAvailable()) {
-    try {
-      const rand = Math.random().toString(36).slice(2);
-      const payload = join(tmpdir(), `pr-notify-${process.pid}-${rand}.txt`);
-      const flatTitle = String(title).replace(/[\r\n]+/g, ' ');
-      await writeFile(payload, `${flatTitle}\n${body}`, 'utf-8');
-      await execFileP('open', ['-a', APPLET_PATH, payload]);
-      return;
-    } catch (err) {
-      await log(`applet notify failed, falling back to osascript: ${err.message}`);
-    }
+  const flatTitle = String(title).replace(/[\r\n]+/g, ' ');
+  const flatBody = String(body).replace(/[\r\n]+/g, ' ');
+  // Prefer terminal-notifier so clicking the notification opens the dashboard
+  // (-open URL). osascript's `display notification` cannot carry a click action.
+  // Fall back to osascript if terminal-notifier is not installed.
+  try {
+    await execFileP('terminal-notifier', [
+      '-title',
+      flatTitle,
+      '-message',
+      flatBody,
+      '-open',
+      notifyOpenUrl,
+    ]);
+    return;
+  } catch (err) {
+    await log(`terminal-notifier unavailable (${err.message}); using osascript fallback`);
   }
-  // Fallback: plain osascript (attributed to the node binary's signing identity).
   try {
     await execFileP('osascript', [
       '-e',
@@ -193,6 +188,7 @@ async function runReview(cfg, pr) {
 
 async function main() {
   const cfg = await loadConfig();
+  notifyOpenUrl = cfg.openUrl || notifyOpenUrl;
   await mkdir(DATA_DIR, { recursive: true });
 
   const prs = await fetchReviewRequested(cfg);
