@@ -12,15 +12,18 @@ DEST="$DEST_DIR/$LABEL.plist"
 NODE_BIN="$(command -v node || true)"
 GH_BIN="$(command -v gh || true)"
 CLAUDE_BIN="$(command -v claude || true)"
+TN_BIN="$(command -v terminal-notifier || true)"
 
 [ -n "$NODE_BIN" ] || { echo "error: node not found in PATH"; exit 1; }
 [ -n "$GH_BIN" ] || { echo "error: gh not found in PATH"; exit 1; }
 [ -n "$CLAUDE_BIN" ] || echo "warning: claude not found in PATH (AI review will fail until installed)"
+[ -n "$TN_BIN" ] || echo "warning: terminal-notifier not found in PATH; notifications will use osascript (clicking won't open the dashboard)"
 
 # launchd gives jobs a minimal PATH, so the agent must carry the dirs of the
 # tools it shells out to. Resolve them here at install time.
 LAUNCH_PATH="$(dirname "$NODE_BIN"):$(dirname "$GH_BIN")"
 [ -n "$CLAUDE_BIN" ] && LAUNCH_PATH="$LAUNCH_PATH:$(dirname "$CLAUDE_BIN")"
+[ -n "$TN_BIN" ] && LAUNCH_PATH="$LAUNCH_PATH:$(dirname "$TN_BIN")"
 LAUNCH_PATH="$LAUNCH_PATH:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin"
 
 mkdir -p "$DEST_DIR" "$REPO_ROOT/data"

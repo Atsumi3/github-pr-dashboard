@@ -22,7 +22,12 @@ const DEFAULT_CONFIG = {
   reviewTimeoutMs: 120000,
   repoFilter: [],
   searchLimit: 50,
+  openUrl: 'http://localhost:3000',
 };
+
+// URL opened when a notification is clicked (terminal-notifier -open). Set from
+// config in main(); the default keeps notify() working if called before then.
+let notifyOpenUrl = DEFAULT_CONFIG.openUrl;
 
 // "Data only" framing + a fenced block (USER_DATA markers) so the CLI treats
 // the diff as material to review, not as instructions to execute. Same defense
@@ -100,6 +105,24 @@ function osaEscape(s) {
 }
 
 async function notify(title, body) {
+  const flatTitle = String(title).replace(/[\r\n]+/g, ' ');
+  const flatBody = String(body).replace(/[\r\n]+/g, ' ');
+  // Prefer terminal-notifier so clicking the notification opens the dashboard
+  // (-open URL). osascript's `display notification` cannot carry a click action.
+  // Fall back to osascript if terminal-notifier is not installed.
+  try {
+    await execFileP('terminal-notifier', [
+      '-title',
+      flatTitle,
+      '-message',
+      flatBody,
+      '-open',
+      notifyOpenUrl,
+    ]);
+    return;
+  } catch (err) {
+    await log(`terminal-notifier unavailable (${err.message}); using osascript fallback`);
+  }
   try {
     await execFileP('osascript', [
       '-e',
@@ -165,6 +188,7 @@ async function runReview(cfg, pr) {
 
 async function main() {
   const cfg = await loadConfig();
+  notifyOpenUrl = cfg.openUrl || notifyOpenUrl;
   await mkdir(DATA_DIR, { recursive: true });
 
   const prs = await fetchReviewRequested(cfg);

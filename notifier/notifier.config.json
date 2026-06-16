@@ -5,5 +5,6 @@
   "maxDiffBytes": 100000,
   "reviewTimeoutMs": 120000,
   "repoFilter": [],
-  "searchLimit": 50
+  "searchLimit": 50,
+  "openUrl": "http://localhost:3000"
 }
