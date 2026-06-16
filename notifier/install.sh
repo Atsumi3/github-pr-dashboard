@@ -25,22 +25,6 @@ LAUNCH_PATH="$LAUNCH_PATH:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin"
 
 mkdir -p "$DEST_DIR" "$REPO_ROOT/data"
 
-# Build a branded notification applet so notifications are attributed to
-# "PR Dashboard" rather than the node binary. notify.js falls back to plain
-# osascript (default sender name) if this is missing.
-APPLET_SRC="$SCRIPT_DIR/notifier-applet.applescript"
-APPLET_DEST="$REPO_ROOT/data/PR Dashboard.app"
-if command -v osacompile >/dev/null 2>&1; then
-  rm -rf "$APPLET_DEST"
-  if osacompile -o "$APPLET_DEST" "$APPLET_SRC" 2>/dev/null; then
-    echo "Built notification applet: $APPLET_DEST"
-  else
-    echo "warning: failed to build notification applet; notifications will use the default sender name"
-  fi
-else
-  echo "warning: osacompile not found; notifications will use the default sender name"
-fi
-
 sed -e "s#__NODE__#$NODE_BIN#g" \
   -e "s#__NOTIFY_JS__#$NOTIFY_JS#g" \
   -e "s#__REPO_ROOT__#$REPO_ROOT#g" \
