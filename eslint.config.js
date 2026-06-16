@@ -58,6 +58,16 @@ export default [
     },
   },
 
+  // notifier (Node) — standalone launchd-driven script, node builtins only
+  {
+    files: ['notifier/**/*.js'],
+    languageOptions: {
+      ecmaVersion: 2024,
+      sourceType: 'module',
+      globals: { ...globals.node },
+    },
+  },
+
   // Frontend ES modules — Browser context.
   {
     files: ['frontend/js/**/*.js'],
