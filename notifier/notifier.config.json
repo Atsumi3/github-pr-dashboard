@@ -1,0 +1,9 @@
+{
+  "cli": "claude",
+  "cliArgs": [],
+  "runAiReview": true,
+  "maxDiffBytes": 100000,
+  "reviewTimeoutMs": 120000,
+  "repoFilter": [],
+  "searchLimit": 50
+}
