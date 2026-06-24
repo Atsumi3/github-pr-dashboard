@@ -52,21 +52,71 @@ router.patch('/api/repos/:owner/:name', async (req, res) => {
     );
   }
   const id = `${owner}/${name}`;
-  const { paused } = req.body;
-  if (typeof paused !== 'boolean') {
-    return sendError(res, 400, ERROR_CODES.INVALID_REQUEST, 'paused must be boolean');
-  }
-  const ok = await store.setRepoPaused(id, paused);
-  if (!ok) {
+  const { paused, requiredApprovals } = req.body || {};
+  // Both fields are optional but at least one must be present so the request
+  // isn't a silent no-op.
+  const hasPaused = paused !== undefined;
+  const hasApprovals = requiredApprovals !== undefined;
+  if (!hasPaused && !hasApprovals) {
     return sendError(
       res,
-      404,
-      ERROR_CODES.REPO_NOT_FOUND,
-      `Repository ${id} is not in the watch list`,
+      400,
+      ERROR_CODES.INVALID_REQUEST,
+      'paused or requiredApprovals is required',
     );
   }
-  console.log(`Repos: ${id} paused=${paused}`);
-  res.json({ status: 'ok', repo: { id, paused } });
+  if (hasPaused && typeof paused !== 'boolean') {
+    return sendError(res, 400, ERROR_CODES.INVALID_REQUEST, 'paused must be boolean');
+  }
+  // null clears the override; integer 1..10 sets it. We cap at 10 because any
+  // higher value is almost certainly a typo and the UI stepper is bounded.
+  if (
+    hasApprovals &&
+    !(
+      requiredApprovals === null ||
+      (Number.isInteger(requiredApprovals) && requiredApprovals >= 1 && requiredApprovals <= 10)
+    )
+  ) {
+    return sendError(
+      res,
+      400,
+      ERROR_CODES.INVALID_REQUEST,
+      'requiredApprovals must be null or an integer 1..10',
+    );
+  }
+  if (hasPaused) {
+    const ok = await store.setRepoPaused(id, paused);
+    if (!ok) {
+      return sendError(
+        res,
+        404,
+        ERROR_CODES.REPO_NOT_FOUND,
+        `Repository ${id} is not in the watch list`,
+      );
+    }
+  }
+  if (hasApprovals) {
+    const ok = await store.setRepoRequiredApprovals(id, requiredApprovals);
+    if (!ok) {
+      return sendError(
+        res,
+        404,
+        ERROR_CODES.REPO_NOT_FOUND,
+        `Repository ${id} is not in the watch list`,
+      );
+    }
+  }
+  console.log(
+    `Repos: ${id} ${hasPaused ? `paused=${paused}` : ''}${hasPaused && hasApprovals ? ' ' : ''}${hasApprovals ? `requiredApprovals=${requiredApprovals}` : ''}`,
+  );
+  res.json({
+    status: 'ok',
+    repo: {
+      id,
+      ...(hasPaused && { paused }),
+      ...(hasApprovals && { requiredApprovals }),
+    },
+  });
 });
 
 router.delete('/api/repos/:owner/:name', async (req, res) => {
