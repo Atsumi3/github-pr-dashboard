@@ -258,6 +258,41 @@ test('storage sync ignores snapshots for another user without changing or writin
   assert.deepEqual(tracker.getUnreadIds('example/project', 7), ['unread']);
 });
 
+test('repository identity is case-insensitive for observation, restored keys, unread, and read', () => {
+  const { tracker, getStored } = createStoredTracker();
+  tracker.observeRepo(
+    { ...repo([pr(7, [event('baseline')])]), repo: 'Example/Project' },
+    { sequence: 1 },
+  );
+  tracker.observeRepo(
+    { ...repo([pr(7, [event('baseline'), event('mixed', t1)])]), repo: 'Example/Project' },
+    { sequence: 2 },
+  );
+  assert.deepEqual(tracker.getUnreadIds('example/project', 7), ['mixed']);
+  assert.deepEqual(tracker.getUnreadIds('EXAMPLE/PROJECT', 7), ['mixed']);
+
+  const saved = getStored();
+  const mixedCaseState = {
+    ...saved,
+    prs: { 'Example/Project#7': saved.prs['example/project#7'] },
+    repoNeedsBaseline: { 'Example/Project': true },
+  };
+  let normalizedState;
+  const restored = createReviewTracker({
+    load: () => mixedCaseState,
+    save: (value) => {
+      normalizedState = structuredClone(value);
+    },
+  });
+  restored.setUser('octocat');
+  assert.deepEqual(restored.getUnreadIds('example/project', 7), ['mixed']);
+  restored.observeRepo(repo([pr(7, [event('baseline'), event('mixed', t1)])]), { sequence: 1 });
+  assert.ok(normalizedState.prs['example/project#7']);
+  assert.equal(Object.hasOwn(normalizedState.repoNeedsBaseline, 'example/project'), false);
+  assert.equal(restored.markRead('example/project', 7, ['mixed']), 1);
+  assert.deepEqual(restored.getUnreadIds('Example/Project', 7), []);
+});
+
 test('unread events survive transient disappearance and older unseen events do not notify', () => {
   const tracker = createReviewTracker();
   tracker.setUser('octocat');
@@ -411,41 +446,6 @@ test('storage read failures still allow in-memory tracking', () => {
       .map((item) => item.id),
     ['memory-only'],
   );
-});
-
-test('restored tracker state is bounded before it is persisted again', () => {
-  const unread = Array.from({ length: 300 }, (_, index) => ({
-    id: `stored-${index}`,
-    submittedAt: new Date(Date.parse(t0) + index * 1000).toISOString(),
-    state: 'COMMENTED',
-    authorLogin: 'octocat',
-    authorAvatarUrl: '',
-    url: 'https://github.com/example/project/pull/1',
-    prTitle: 'PR 1',
-    prUrl: 'https://github.com/example/project/pull/1',
-  }));
-  const prs = Object.fromEntries(
-    Array.from({ length: 501 }, (_, index) => [
-      `owner${index}/repo#${index + 1}`,
-      {
-        initialized: true,
-        seenIds: Array.from({ length: 1000 }, (_unused, id) => `seen-${id}`),
-        unread: index === 0 ? unread : [],
-      },
-    ]),
-  );
-  const repoNeedsBaseline = Object.fromEntries(
-    Array.from({ length: 501 }, (_, index) => [`owner${index}/repo`, true]),
-  );
-  let persisted;
-  const tracker = createReviewTracker({
-    load: () => ({ version: 1, userLogin: 'octocat', prs, repoNeedsBaseline }),
-    save: (state) => {
-      persisted = structuredClone(state);
-    },
-  });
-  tracker.setUser('octocat');
-  tracker.markRepoForBaseline('new/repo');
   tracker.syncFromStorage({ version: 1, userLogin: 'octocat', prs: {}, repoNeedsBaseline: {} });
   assert.deepEqual(tracker.getUnreadIds('example/project', 7), ['memory-only']);
 });
@@ -470,12 +470,47 @@ test('baseline flags remain usable when tracker storage reads and writes fail', 
       .map((item) => item.id),
     ['after-resume'],
   );
+});
+
+test('restored tracker state is bounded before it is persisted again', () => {
+  const unread = Array.from({ length: 300 }, (_, index) => ({
+    id: `stored-${index}`,
+    submittedAt: new Date(Date.parse(t0) + index * 1000).toISOString(),
+    state: 'COMMENTED',
+    authorLogin: 'octocat',
+    authorAvatarUrl: '',
+    url: 'https://github.com/example/project/pull/1',
+    prTitle: 'PR 1',
+    prUrl: 'https://github.com/example/project/pull/1',
+  }));
+  const prs = Object.fromEntries(
+    Array.from({ length: 501 }, (_, index) => [
+      `owner${index}/repo#${index + 1}`,
+      {
+        initialized: true,
+        seenIds: Array.from({ length: 1000 }, (_unused, id) => `seen-${id}`),
+        readAcks: Array.from({ length: 1000 }, (_unused, id) => ({ id: `read-${id}`, at: id })),
+        unread: index === 0 ? unread : [],
+      },
+    ]),
+  );
+  const repoNeedsBaseline = Object.fromEntries(
+    Array.from({ length: 501 }, (_, index) => [`owner${index}/repo`, true]),
+  );
+  let persisted;
+  const tracker = createReviewTracker({
+    load: () => ({ version: 1, userLogin: 'octocat', prs, repoNeedsBaseline }),
+    save: (state) => {
+      persisted = structuredClone(state);
+    },
+  });
+  tracker.setUser('octocat');
+  tracker.markRepoForBaseline('new/repo');
 
   assert.equal(Object.keys(persisted.prs).length, 500);
   assert.equal(Object.keys(persisted.repoNeedsBaseline).length, 500);
   const first = Object.values(persisted.prs)[0];
   assert.equal(first.seenIds.length, 100);
+  assert.equal(first.readAcks.length, 500);
   assert.equal(first.unread.length, 250);
 });
-        readAcks: Array.from({ length: 1000 }, (_unused, id) => ({ id: `read-${id}`, at: id })),
-  assert.equal(first.readAcks.length, 500);

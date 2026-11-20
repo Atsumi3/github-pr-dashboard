@@ -16,6 +16,10 @@ function validRepoId(repo) {
   return typeof repo === 'string' && repo.length <= 255 && /^[^/\s]+\/[^/\s]+$/.test(repo);
 }
 
+function normalizeRepoId(repo) {
+  return validRepoId(repo) ? repo.toLowerCase() : null;
+}
+
 function validTimestamp(value) {
   if (typeof value !== 'string' || value.length > 64) return null;
   const ms = Date.parse(value);
@@ -75,11 +79,11 @@ function emptyRecord(repo, number) {
     watermarkMs: null,
     watermarkIds: [],
     seenIds: [],
+    readAcks: [],
     unread: [],
     lastObservedAt: 0,
   };
 }
-    readAcks: [],
 
 function emptyState(userLogin) {
   return { version: VERSION, userLogin, prs: {}, repoNeedsBaseline: {} };
@@ -130,10 +134,6 @@ function sanitizeIds(value, limit) {
   return result.slice(-limit);
 }
 
-function sanitizeState(raw, userLogin) {
-  const state = emptyState(userLogin);
-  if (
-    !raw ||
 function sanitizeReadAcks(value) {
   if (!Array.isArray(value)) return [];
   const acknowledgements = new Map();
@@ -227,6 +227,10 @@ function stateSignature(state) {
   ]);
 }
 
+function sanitizeState(raw, userLogin) {
+  const state = emptyState(userLogin);
+  if (
+    !raw ||
     raw.version !== VERSION ||
     raw.userLogin !== userLogin ||
     !raw.prs ||
@@ -244,26 +248,30 @@ function stateSignature(state) {
     const value = raw.prs[key];
     const match = /^([^#]+\/[^#]+)#([1-9]\d*)$/.exec(key);
     if (!match || !value || typeof value !== 'object') continue;
-    const [, repo, numberText] = match;
+    const [, rawRepo, numberText] = match;
+    const repo = normalizeRepoId(rawRepo);
     const number = Number(numberText);
-    if (!Number.isSafeInteger(number) || !validRepoId(repo)) continue;
+    if (!Number.isSafeInteger(number) || !repo) continue;
 
     const record = emptyRecord(repo, number);
     record.initialized = value.initialized === true;
     record.watermarkMs = Number.isFinite(value.watermarkMs) ? value.watermarkMs : null;
     record.watermarkIds = sanitizeIds(value.watermarkIds, MAX_WATERMARK_IDS);
     record.seenIds = sanitizeIds(value.seenIds, MAX_SEEN_IDS_PER_PR);
+    record.readAcks = sanitizeReadAcks(value.readAcks);
     record.unread = Array.isArray(value.unread)
       ? value.unread.slice(-MAX_UNREAD_EVENTS).map(sanitizeStoredEvent).filter(Boolean)
       : [];
-    for (const event of record.unread) addSeen(record, event.id);
-    record.lastObservedAt = Number.isFinite(value.lastObservedAt) ? value.lastObservedAt : 0;
-    record.readAcks = sanitizeReadAcks(value.readAcks);
-    state.prs[key] = record;
-  }
-
     const acknowledged = new Set(record.readAcks.map((ack) => ack.id));
     record.unread = record.unread.filter((event) => !acknowledged.has(event.id));
+    for (const event of record.unread) addSeen(record, event.id);
+    record.lastObservedAt = Number.isFinite(value.lastObservedAt) ? value.lastObservedAt : 0;
+    const normalizedKey = repo + '#' + number;
+    state.prs[normalizedKey] = state.prs[normalizedKey]
+      ? mergeRecords(state.prs[normalizedKey], record)
+      : record;
+  }
+
   if (
     raw.repoNeedsBaseline &&
     typeof raw.repoNeedsBaseline === 'object' &&
@@ -274,8 +282,9 @@ function stateSignature(state) {
       if (!Object.hasOwn(raw.repoNeedsBaseline, repo)) continue;
       if (trackedRepos >= MAX_TRACKED_PRS) break;
       trackedRepos += 1;
-      if (validRepoId(repo) && raw.repoNeedsBaseline[repo] === true) {
-        state.repoNeedsBaseline[repo] = true;
+      const normalizedRepo = normalizeRepoId(repo);
+      if (normalizedRepo && raw.repoNeedsBaseline[repo] === true) {
+        state.repoNeedsBaseline[normalizedRepo] = true;
       }
     }
   }
@@ -359,15 +368,6 @@ export function createReviewTracker({
     }
   }
 
-  function setUser(login) {
-    const nextLogin = normalizeLogin(login);
-    if (nextLogin === userLogin) return;
-    userLogin = nextLogin;
-    latestSequenceByRepo.clear();
-    if (!nextLogin) {
-      state = emptyState(null);
-      return;
-    }
   function loadState() {
     try {
       const stored = load();
@@ -408,20 +408,32 @@ export function createReviewTracker({
     return true;
   }
 
+  function setUser(login) {
+    const nextLogin = normalizeLogin(login);
+    if (nextLogin === userLogin) return;
+    userLogin = nextLogin;
+    latestSequenceByRepo.clear();
+    if (!nextLogin) {
+      state = emptyState(null);
+      return;
+    }
     state = loadState().state;
   }
 
   function getRecord(repo, number) {
-    return state.prs[`${repo}#${number}`] || null;
+    const normalizedRepo = normalizeRepoId(repo);
+    return normalizedRepo ? state.prs[normalizedRepo + '#' + number] || null : null;
   }
 
   function observeRepo(repoData, { sequence } = {}) {
-    const repo = repoData?.repo;
-    if (!userLogin || !validRepoId(repo)) return [];
+    const displayRepo = repoData?.repo;
+    const repo = normalizeRepoId(displayRepo);
+    if (!userLogin || !repo) return [];
     const previousSequence = latestSequenceByRepo.get(repo) ?? -Infinity;
     if (Number.isFinite(sequence) && sequence < previousSequence) return [];
     if (Number.isFinite(sequence)) latestSequenceByRepo.set(repo, sequence);
 
+    refreshFromStorage();
     if (repoData.paused) {
       state.repoNeedsBaseline[repo] = true;
       trimState(state);
@@ -433,11 +445,10 @@ export function createReviewTracker({
     const baselineRepo = state.repoNeedsBaseline[repo] === true;
     delete state.repoNeedsBaseline[repo];
     const newEvents = [];
-    refreshFromStorage();
 
     for (const pr of repoData.prs) {
       if (!Number.isSafeInteger(pr?.number) || pr.number < 1) continue;
-      const key = `${repo}#${pr.number}`;
+      const key = repo + '#' + pr.number;
       const record = state.prs[key] || emptyRecord(repo, pr.number);
       const events = (Array.isArray(pr.reviewEvents) ? pr.reviewEvents : [])
         .map((event) => normalizeEvent(event, pr))
@@ -452,6 +463,7 @@ export function createReviewTracker({
         const knownIds = new Set([
           ...record.seenIds,
           ...record.watermarkIds,
+          ...record.readAcks.map((ack) => ack.id),
           ...record.unread.map((event) => event.id),
         ]);
         for (const event of events) {
@@ -459,11 +471,10 @@ export function createReviewTracker({
           const eventTime = Date.parse(event.submittedAt);
           if (record.watermarkMs === null || eventTime >= record.watermarkMs) {
             record.unread.push(event);
-            newEvents.push({ ...event, repo, number: pr.number });
+            newEvents.push({ ...event, repo: displayRepo, number: pr.number });
           }
           addSeen(record, event.id);
           knownIds.add(event.id);
-          ...record.readAcks.map((ack) => ack.id),
         }
         updateWatermark(record, events);
       }
@@ -486,9 +497,10 @@ export function createReviewTracker({
   }
 
   function markRepoForBaseline(repo) {
-    if (!userLogin || !validRepoId(repo)) return;
+    const normalizedRepo = normalizeRepoId(repo);
+    if (!userLogin || !normalizedRepo) return;
     refreshFromStorage();
-    state.repoNeedsBaseline[repo] = true;
+    state.repoNeedsBaseline[normalizedRepo] = true;
     trimState(state);
     persist();
   }
@@ -500,10 +512,16 @@ export function createReviewTracker({
   }
 
   function markRead(repo, number, ids) {
+    if (!userLogin || !Array.isArray(ids) || ids.length === 0) return 0;
+    refreshFromStorage();
     const record = getRecord(repo, number);
     if (!record) return 0;
     const selected = new Set(ids);
     const before = record.unread.length;
+    const unreadIds = new Set(record.unread.map((event) => event.id));
+    for (const id of selected) {
+      if (unreadIds.has(id)) addReadAck(record, id);
+    }
     record.unread = record.unread.filter((event) => !selected.has(event.id));
     const cleared = before - record.unread.length;
     if (cleared > 0) persist();
@@ -513,16 +531,10 @@ export function createReviewTracker({
   function clearTracker() {
     state = emptyState(userLogin);
     latestSequenceByRepo.clear();
-    if (!userLogin || !Array.isArray(ids) || ids.length === 0) return 0;
-    refreshFromStorage();
     try {
       clearPersisted();
     } catch {
       // Ignore storage failures; the in-memory state is already cleared.
-    const unreadIds = new Set(record.unread.map((event) => event.id));
-    for (const id of selected) {
-      if (unreadIds.has(id)) addReadAck(record, id);
-    }
     }
   }
 
@@ -531,10 +543,10 @@ export function createReviewTracker({
     observeRepo,
     observeSnapshot,
     markRepoForBaseline,
+    syncFromStorage,
     getUnread,
     getUnreadIds: (repo, number) => getUnread(repo, number).map((event) => event.id),
     markRead,
     clear: clearTracker,
   };
 }
-    syncFromStorage,

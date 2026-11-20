@@ -128,6 +128,33 @@ test('cross-repository search query maps the same submitted review event shape',
   }
 });
 
+test('cross-repository search groups results case-insensitively and preserves watched casing', async (t) => {
+  let graphQLRepo;
+  const queries = withGraphQLResponse(t, () => ({
+    search: {
+      nodes: [
+        {
+          ...prNode(),
+          repository: { nameWithOwner: graphQLRepo },
+        },
+      ],
+    },
+  }));
+
+  for (const [watchedRepo, returnedRepo] of [
+    ['Fixture-Org/Sample-Repo', 'fixture-org/sample-repo'],
+    ['fixture-org/sample-repo', 'Fixture-Org/Sample-Repo'],
+  ]) {
+    graphQLRepo = returnedRepo;
+    const [result] = await searchOpenPRsForMe('test-token', [watchedRepo], 'octocat');
+
+    assert.equal(result.repo, watchedRepo);
+    assert.equal(result.prs.length, 1);
+    assertReviewEvents(result.prs[0]);
+  }
+  assert.equal(queries.length, 4);
+});
+
 test('empty review connections normalize to an empty event list', async (t) => {
   const node = prNode();
   node.reviews = { nodes: [] };

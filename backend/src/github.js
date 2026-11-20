@@ -423,14 +423,18 @@ export async function searchOpenPRsForMe(token, repoFullNames, me) {
   const resolved = await resolveCompares(token, mapped, (p) => p._repoFullName);
 
   const byRepo = new Map();
-  for (const id of repoFullNames) byRepo.set(id, []);
+  for (const id of repoFullNames) {
+    const key = id.toLowerCase();
+    if (!byRepo.has(key)) byRepo.set(key, { repo: id, prs: [] });
+  }
   for (const pr of resolved) {
     const repoId = pr._repoFullName;
     delete pr._repoFullName;
-    if (byRepo.has(repoId)) byRepo.get(repoId).push(pr);
+    const group = byRepo.get(repoId.toLowerCase());
+    if (group) group.prs.push(pr);
   }
 
-  return Array.from(byRepo, ([repo, prs]) => ({ repo, prs, error: null }));
+  return Array.from(byRepo.values(), ({ repo, prs }) => ({ repo, prs, error: null }));
 }
 
 function mapRollupState(state) {
