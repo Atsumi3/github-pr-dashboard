@@ -104,7 +104,7 @@ backend の `paused` フラグが UI 可視性とポーリング停止の **唯�
 
 ## 8. 技術スタック
 
-- backend: Node.js 24 + Express 5.2.1 (ランタイム依存はこれのみ)
+- backend: Node.js 24 + Express 5.3.0 (ランタイム依存はこれのみ)
 - frontend: Vanilla HTML/CSS/JS (依存ゼロ、CDN 経由 Web Font のみ)
 - 配信: nginx 1.29
 - ai-server: Node.js 20+ + node:child_process (依存ゼロ、ホスト上)
