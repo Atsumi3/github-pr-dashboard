@@ -31,7 +31,11 @@ function storageKey(key) {
   return `${KEY_PREFIX}${key}`;
 }
 
-export function readCache(key, ttlMs = TTL_BY_KEY[key] ?? DEFAULT_TTL_MS) {
+export function readCache(
+  key,
+  ttlMs = TTL_BY_KEY[key] ?? DEFAULT_TTL_MS,
+  { throwOnError = false } = {},
+) {
   try {
     const raw = localStorage.getItem(storageKey(key));
     if (!raw) return null;
@@ -39,7 +43,8 @@ export function readCache(key, ttlMs = TTL_BY_KEY[key] ?? DEFAULT_TTL_MS) {
     if (!parsed || typeof parsed.at !== 'number') return null;
     if (Date.now() - parsed.at > ttlMs) return null;
     return { data: parsed.data, at: parsed.at };
-  } catch {
+  } catch (error) {
+    if (throwOnError) throw error;
     return null;
   }
 }

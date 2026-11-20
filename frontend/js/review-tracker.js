@@ -3,6 +3,7 @@ const MAX_TRACKED_PRS = 500;
 const MAX_SEEN_IDS_PER_PR = 100;
 const MAX_WATERMARK_IDS = 100;
 const MAX_UNREAD_EVENTS = 250;
+const MAX_READ_ACKS_PER_PR = 500;
 const REVIEW_STATES = new Set(['APPROVED', 'CHANGES_REQUESTED', 'COMMENTED', 'DISMISSED']);
 
 function normalizeLogin(login) {
@@ -78,6 +79,7 @@ function emptyRecord(repo, number) {
     lastObservedAt: 0,
   };
 }
+    readAcks: [],
 
 function emptyState(userLogin) {
   return { version: VERSION, userLogin, prs: {}, repoNeedsBaseline: {} };
@@ -132,6 +134,99 @@ function sanitizeState(raw, userLogin) {
   const state = emptyState(userLogin);
   if (
     !raw ||
+function sanitizeReadAcks(value) {
+  if (!Array.isArray(value)) return [];
+  const acknowledgements = new Map();
+  for (const ack of value.slice(-MAX_READ_ACKS_PER_PR * 2)) {
+    if (
+      !ack ||
+      typeof ack.id !== 'string' ||
+      !ack.id ||
+      ack.id.length > 256 ||
+      !Number.isFinite(ack.at)
+    ) {
+      continue;
+    }
+    const previous = acknowledgements.get(ack.id);
+    if (!previous || ack.at >= previous.at) {
+      acknowledgements.set(ack.id, { id: ack.id, at: ack.at });
+    }
+  }
+  return [...acknowledgements.values()].sort((a, b) => a.at - b.at).slice(-MAX_READ_ACKS_PER_PR);
+}
+
+function addReadAck(record, id, at = Date.now()) {
+  if (typeof id !== 'string' || !id || id.length > 256 || !Number.isFinite(at)) return;
+  record.readAcks = sanitizeReadAcks([...record.readAcks, { id, at }]);
+}
+
+function mergeRecords(left, right) {
+  const record = emptyRecord(left.repo, left.number);
+  record.initialized = left.initialized || right.initialized;
+  const leftWatermark = left.watermarkMs ?? -Infinity;
+  const rightWatermark = right.watermarkMs ?? -Infinity;
+  record.watermarkMs = Math.max(leftWatermark, rightWatermark);
+  if (!Number.isFinite(record.watermarkMs)) record.watermarkMs = null;
+  if (record.watermarkMs !== null) {
+    record.watermarkIds = sanitizeIds(
+      [
+        ...(left.watermarkMs === record.watermarkMs ? left.watermarkIds : []),
+        ...(right.watermarkMs === record.watermarkMs ? right.watermarkIds : []),
+      ],
+      MAX_WATERMARK_IDS,
+    );
+  }
+  for (const id of [...left.seenIds, ...right.seenIds]) addSeen(record, id);
+  record.readAcks = sanitizeReadAcks([...left.readAcks, ...right.readAcks]);
+  const acknowledged = new Set(record.readAcks.map((ack) => ack.id));
+  const unreadById = new Map();
+  for (const event of [...left.unread, ...right.unread]) {
+    if (!acknowledged.has(event.id)) unreadById.set(event.id, event);
+  }
+  record.unread = [...unreadById.values()].slice(-MAX_UNREAD_EVENTS);
+  for (const event of record.unread) addSeen(record, event.id);
+  record.lastObservedAt = Math.max(left.lastObservedAt, right.lastObservedAt);
+  return record;
+}
+
+function mergeStates(userLogin, ...sources) {
+  const merged = emptyState(userLogin);
+  for (const source of sources) {
+    const sanitized = sanitizeState(source, userLogin);
+    for (const [key, record] of Object.entries(sanitized.prs)) {
+      merged.prs[key] = merged.prs[key] ? mergeRecords(merged.prs[key], record) : record;
+    }
+    for (const repo of Object.keys(sanitized.repoNeedsBaseline)) {
+      merged.repoNeedsBaseline[repo] = true;
+    }
+  }
+  trimState(merged);
+  return merged;
+}
+
+function stateSignature(state) {
+  const prs = Object.entries(state.prs)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, record]) => [
+      key,
+      record.initialized,
+      record.watermarkMs,
+      [...record.watermarkIds].sort(),
+      [...record.seenIds].sort(),
+      record.readAcks
+        .map((ack) => [ack.id, ack.at])
+        .sort(([aId, aAt], [bId, bAt]) => aId.localeCompare(bId) || aAt - bAt),
+      [...record.unread].sort((a, b) => a.id.localeCompare(b.id)),
+      record.lastObservedAt,
+    ]);
+  return JSON.stringify([
+    state.version,
+    state.userLogin,
+    prs,
+    Object.keys(state.repoNeedsBaseline).sort(),
+  ]);
+}
+
     raw.version !== VERSION ||
     raw.userLogin !== userLogin ||
     !raw.prs ||
@@ -163,9 +258,12 @@ function sanitizeState(raw, userLogin) {
       : [];
     for (const event of record.unread) addSeen(record, event.id);
     record.lastObservedAt = Number.isFinite(value.lastObservedAt) ? value.lastObservedAt : 0;
+    record.readAcks = sanitizeReadAcks(value.readAcks);
     state.prs[key] = record;
   }
 
+    const acknowledged = new Set(record.readAcks.map((ack) => ack.id));
+    record.unread = record.unread.filter((event) => !acknowledged.has(event.id));
   if (
     raw.repoNeedsBaseline &&
     typeof raw.repoNeedsBaseline === 'object' &&
@@ -270,13 +368,47 @@ export function createReviewTracker({
       state = emptyState(null);
       return;
     }
-    let saved;
+  function loadState() {
     try {
-      saved = load();
+      const stored = load();
+      const succeeded = Boolean(
+        stored &&
+        stored.version === VERSION &&
+        stored.userLogin === userLogin &&
+        stored.prs &&
+        typeof stored.prs === 'object' &&
+        !Array.isArray(stored.prs),
+      );
+      return { state: sanitizeState(stored, userLogin), succeeded };
     } catch {
-      saved = null;
+      return { state: emptyState(userLogin), succeeded: false };
     }
-    state = sanitizeState(saved, nextLogin);
+  }
+
+  function refreshFromStorage() {
+    const loaded = loadState();
+    const merged = mergeStates(userLogin, state, loaded.state);
+    if (loaded.succeeded) merged.repoNeedsBaseline = { ...loaded.state.repoNeedsBaseline };
+    state = merged;
+  }
+
+  function syncFromStorage(incomingState) {
+    if (!userLogin || normalizeLogin(incomingState?.userLogin) !== userLogin) return false;
+    const loaded = loadState();
+    const merged = mergeStates(userLogin, state, incomingState, loaded.state);
+    if (loaded.succeeded) merged.repoNeedsBaseline = { ...loaded.state.repoNeedsBaseline };
+    state = merged;
+    if (stateSignature(state) !== stateSignature(loaded.state)) {
+      try {
+        save(state);
+      } catch {
+        // Keep the merged in-memory state when browser storage is unavailable.
+      }
+    }
+    return true;
+  }
+
+    state = loadState().state;
   }
 
   function getRecord(repo, number) {
@@ -301,6 +433,7 @@ export function createReviewTracker({
     const baselineRepo = state.repoNeedsBaseline[repo] === true;
     delete state.repoNeedsBaseline[repo];
     const newEvents = [];
+    refreshFromStorage();
 
     for (const pr of repoData.prs) {
       if (!Number.isSafeInteger(pr?.number) || pr.number < 1) continue;
@@ -330,6 +463,7 @@ export function createReviewTracker({
           }
           addSeen(record, event.id);
           knownIds.add(event.id);
+          ...record.readAcks.map((ack) => ack.id),
         }
         updateWatermark(record, events);
       }
@@ -353,6 +487,7 @@ export function createReviewTracker({
 
   function markRepoForBaseline(repo) {
     if (!userLogin || !validRepoId(repo)) return;
+    refreshFromStorage();
     state.repoNeedsBaseline[repo] = true;
     trimState(state);
     persist();
@@ -366,7 +501,7 @@ export function createReviewTracker({
 
   function markRead(repo, number, ids) {
     const record = getRecord(repo, number);
-    if (!record || !Array.isArray(ids) || ids.length === 0) return 0;
+    if (!record) return 0;
     const selected = new Set(ids);
     const before = record.unread.length;
     record.unread = record.unread.filter((event) => !selected.has(event.id));
@@ -378,10 +513,16 @@ export function createReviewTracker({
   function clearTracker() {
     state = emptyState(userLogin);
     latestSequenceByRepo.clear();
+    if (!userLogin || !Array.isArray(ids) || ids.length === 0) return 0;
+    refreshFromStorage();
     try {
       clearPersisted();
     } catch {
       // Ignore storage failures; the in-memory state is already cleared.
+    const unreadIds = new Set(record.unread.map((event) => event.id));
+    for (const id of selected) {
+      if (unreadIds.has(id)) addReadAck(record, id);
+    }
     }
   }
 
@@ -396,3 +537,4 @@ export function createReviewTracker({
     clear: clearTracker,
   };
 }
+    syncFromStorage,

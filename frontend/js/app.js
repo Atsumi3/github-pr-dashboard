@@ -45,7 +45,8 @@ let currentPollIntervalMs = 60_000;
 const latestRepoSnapshotSequence = new Map();
 const VISIBILITY_REFETCH_THRESHOLD = 30_000; // skip immediate refetch if within 30s
 const reviewTracker = createReviewTracker({
-  load: () => readCache(CACHE_KEYS.reviewTracker, Number.POSITIVE_INFINITY)?.data,
+  load: () =>
+    readCache(CACHE_KEYS.reviewTracker, Number.POSITIVE_INFINITY, { throwOnError: true })?.data,
   save: (state) => writeCache(CACHE_KEYS.reviewTracker, state),
   clear: () => clearCache(CACHE_KEYS.reviewTracker),
 });
@@ -57,6 +58,19 @@ function rerenderFromLastData() {
   lastRenderSig = renderSignature(lastData);
   reapplySearchFilter();
 }
+
+window.addEventListener('storage', (event) => {
+  if (event.key !== 'dash:review-tracker' || !event.newValue) return;
+  let cached;
+  try {
+    cached = JSON.parse(event.newValue);
+  } catch {
+    return;
+  }
+  if (!cached || typeof cached !== 'object' || !Object.hasOwn(cached, 'data')) return;
+  if (!reviewTracker.syncFromStorage(cached.data)) return;
+  rerenderFromLastData();
+});
 
 function reapplySearchFilter() {
   const input = document.getElementById('pr-search');

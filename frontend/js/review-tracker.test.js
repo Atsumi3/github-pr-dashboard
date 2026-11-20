@@ -103,6 +103,161 @@ test('unread and seen IDs survive reload and repeated snapshots do not retrigger
   assert.deepEqual(reloaded.getUnreadIds('example/project', 7), ['new']);
 });
 
+test('shared tabs merge read acknowledgements before unread events and preserve later arrivals', () => {
+  let stored = null;
+  let writes = 0;
+  const createTracker = () => {
+    const tracker = createReviewTracker({
+      load: () => stored,
+      save: (value) => {
+        stored = structuredClone(value);
+        writes += 1;
+      },
+    });
+    tracker.setUser('octocat');
+    return tracker;
+  };
+  const trackerA = createTracker();
+  const trackerB = createTracker();
+  const baseline = repo([pr(7, [event('baseline')])]);
+  trackerA.observeRepo(baseline, { sequence: 1 });
+  trackerB.observeRepo(baseline, { sequence: 1 });
+
+  const firstReview = repo([pr(7, [event('baseline'), event('R1', t1)])]);
+  trackerA.observeRepo(firstReview, { sequence: 2 });
+  trackerB.observeRepo(firstReview, { sequence: 2 });
+  trackerA.markRead('example/project', 7, ['R1']);
+  const staleReadEvent = structuredClone(stored);
+
+  const laterReview = repo([pr(7, [event('baseline'), event('R1', t1), event('R2', t1)])]);
+  assert.deepEqual(
+    trackerB.observeRepo(laterReview, { sequence: 3 }).map((item) => item.id),
+    ['R2'],
+  );
+  assert.deepEqual(trackerB.getUnreadIds('example/project', 7), ['R2']);
+
+  const beforeStaleEvent = writes;
+  trackerB.syncFromStorage(staleReadEvent);
+  assert.deepEqual(trackerB.getUnreadIds('example/project', 7), ['R2']);
+  assert.equal(writes, beforeStaleEvent);
+  trackerB.syncFromStorage(staleReadEvent);
+  assert.equal(writes, beforeStaleEvent);
+
+  const reloaded = createTracker();
+  assert.deepEqual(reloaded.getUnreadIds('example/project', 7), ['R2']);
+});
+
+test('storage sync repairs a stale write without echoing unchanged state', () => {
+  let stored = null;
+  let writes = 0;
+  const createTracker = () => {
+    const tracker = createReviewTracker({
+      load: () => stored,
+      save: (value) => {
+        stored = structuredClone(value);
+        writes += 1;
+      },
+    });
+    tracker.setUser('octocat');
+    return tracker;
+  };
+  const trackerA = createTracker();
+  const trackerB = createTracker();
+  const snapshot = repo([pr(7, [event('baseline'), event('R', t1)])]);
+  trackerA.observeRepo(repo([pr(7, [event('baseline')])]), { sequence: 1 });
+  trackerB.observeRepo(repo([pr(7, [event('baseline')])]), { sequence: 1 });
+  trackerA.observeRepo(snapshot, { sequence: 2 });
+  trackerB.observeRepo(snapshot, { sequence: 2 });
+  const staleWrite = structuredClone(stored);
+  trackerA.markRead('example/project', 7, ['R']);
+  const readEvent = structuredClone(stored);
+  stored = staleWrite;
+
+  const beforeRepair = writes;
+  trackerA.syncFromStorage(readEvent);
+  assert.equal(writes, beforeRepair + 1);
+  assert.deepEqual(trackerA.getUnreadIds('example/project', 7), []);
+
+  const repaired = structuredClone(stored);
+  const beforeNoopSync = writes;
+  trackerB.syncFromStorage(repaired);
+  trackerA.syncFromStorage(repaired);
+  assert.deepEqual(trackerB.getUnreadIds('example/project', 7), []);
+  assert.equal(writes, beforeNoopSync);
+  const reloaded = createTracker();
+  assert.deepEqual(reloaded.getUnreadIds('example/project', 7), []);
+});
+
+test('latest stored baseline state wins over stale tab and storage-event flags', () => {
+  let stored = null;
+  let writes = 0;
+  const createTracker = () => {
+    const tracker = createReviewTracker({
+      load: () => stored,
+      save: (value) => {
+        stored = structuredClone(value);
+        writes += 1;
+      },
+    });
+    tracker.setUser('octocat');
+    return tracker;
+  };
+  const trackerA = createTracker();
+  const trackerB = createTracker();
+  const paused = repo([], { paused: true });
+  trackerA.observeRepo(paused, { sequence: 1 });
+  trackerB.observeRepo(paused, { sequence: 1 });
+  const stalePausedEvent = structuredClone(stored);
+
+  trackerA.observeRepo(repo([pr(7, [event('baseline')])]), { sequence: 2 });
+  const resumedState = structuredClone(stored);
+  assert.equal(Object.hasOwn(resumedState.repoNeedsBaseline, 'example/project'), false);
+  trackerB.syncFromStorage(resumedState);
+
+  const beforeStaleEvent = writes;
+  trackerB.syncFromStorage(stalePausedEvent);
+  trackerA.syncFromStorage(stalePausedEvent);
+  assert.equal(writes, beforeStaleEvent);
+
+  const newlySubmitted = repo([pr(7, [event('baseline'), event('after-resume', t1)])]);
+  assert.deepEqual(
+    trackerB.observeRepo(newlySubmitted, { sequence: 2 }).map((item) => item.id),
+    ['after-resume'],
+  );
+  assert.deepEqual(trackerB.getUnreadIds('example/project', 7), ['after-resume']);
+  assert.equal(Object.hasOwn(stored.repoNeedsBaseline, 'example/project'), false);
+});
+
+test('storage sync ignores snapshots for another user without changing or writing state', () => {
+  let stored = null;
+  let writes = 0;
+  const tracker = createReviewTracker({
+    load: () => stored,
+    save: (value) => {
+      stored = structuredClone(value);
+      writes += 1;
+    },
+  });
+  tracker.setUser('octocat');
+  tracker.observeRepo(repo([pr(7, [event('baseline')])]), { sequence: 1 });
+  tracker.observeRepo(repo([pr(7, [event('baseline'), event('unread', t1)])]), { sequence: 2 });
+  const beforeState = structuredClone(stored);
+  const beforeWrites = writes;
+
+  assert.equal(
+    tracker.syncFromStorage({
+      ...beforeState,
+      userLogin: 'another-user',
+      prs: {},
+      repoNeedsBaseline: { 'other/repo': true },
+    }),
+    false,
+  );
+  assert.equal(writes, beforeWrites);
+  assert.deepEqual(stored, beforeState);
+  assert.deepEqual(tracker.getUnreadIds('example/project', 7), ['unread']);
+});
+
 test('unread events survive transient disappearance and older unseen events do not notify', () => {
   const tracker = createReviewTracker();
   tracker.setUser('octocat');
@@ -291,6 +446,30 @@ test('restored tracker state is bounded before it is persisted again', () => {
   });
   tracker.setUser('octocat');
   tracker.markRepoForBaseline('new/repo');
+  tracker.syncFromStorage({ version: 1, userLogin: 'octocat', prs: {}, repoNeedsBaseline: {} });
+  assert.deepEqual(tracker.getUnreadIds('example/project', 7), ['memory-only']);
+});
+
+test('baseline flags remain usable when tracker storage reads and writes fail', () => {
+  const tracker = createReviewTracker({
+    load: () => {
+      throw new Error('storage unavailable');
+    },
+    save: () => {
+      throw new Error('storage unavailable');
+    },
+  });
+  tracker.setUser('octocat');
+  tracker.observeRepo(repo([], { paused: true }), { sequence: 1 });
+  tracker.syncFromStorage({ version: 1, userLogin: 'octocat', prs: {}, repoNeedsBaseline: {} });
+
+  assert.deepEqual(tracker.observeRepo(repo([pr(7, [event('baseline')])]), { sequence: 2 }), []);
+  assert.deepEqual(
+    tracker
+      .observeRepo(repo([pr(7, [event('baseline'), event('after-resume', t1)])]), { sequence: 3 })
+      .map((item) => item.id),
+    ['after-resume'],
+  );
 
   assert.equal(Object.keys(persisted.prs).length, 500);
   assert.equal(Object.keys(persisted.repoNeedsBaseline).length, 500);
@@ -298,3 +477,5 @@ test('restored tracker state is bounded before it is persisted again', () => {
   assert.equal(first.seenIds.length, 100);
   assert.equal(first.unread.length, 250);
 });
+        readAcks: Array.from({ length: 1000 }, (_unused, id) => ({ id: `read-${id}`, at: id })),
+  assert.equal(first.readAcks.length, 500);
