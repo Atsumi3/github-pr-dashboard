@@ -188,7 +188,7 @@ test('storage sync repairs a stale write without echoing unchanged state', () =>
   assert.deepEqual(reloaded.getUnreadIds('example/project', 7), []);
 });
 
-test('latest stored baseline state wins over stale tab and storage-event flags', () => {
+test('each tab baselines its own resume and ignores stale stored baseline flags', () => {
   let stored = null;
   let writes = 0;
   const createTracker = () => {
@@ -204,24 +204,33 @@ test('latest stored baseline state wins over stale tab and storage-event flags',
   };
   const trackerA = createTracker();
   const trackerB = createTracker();
+  const initial = repo([pr(7, [event('baseline')])]);
+  trackerA.observeRepo(initial, { sequence: 1 });
+  trackerB.observeRepo(initial, { sequence: 1 });
   const paused = repo([], { paused: true });
-  trackerA.observeRepo(paused, { sequence: 1 });
-  trackerB.observeRepo(paused, { sequence: 1 });
+  trackerA.observeRepo(paused, { sequence: 2 });
+  trackerB.observeRepo(paused, { sequence: 2 });
   const stalePausedEvent = structuredClone(stored);
 
-  trackerA.observeRepo(repo([pr(7, [event('baseline')])]), { sequence: 2 });
+  trackerA.observeRepo(initial, { sequence: 3 });
   const resumedState = structuredClone(stored);
   assert.equal(Object.hasOwn(resumedState.repoNeedsBaseline, 'example/project'), false);
   trackerB.syncFromStorage(resumedState);
+
+  const firstResume = repo([pr(7, [event('baseline'), event('while-paused', t1)])]);
+  assert.deepEqual(trackerB.observeRepo(firstResume, { sequence: 3 }), []);
+  assert.deepEqual(trackerB.getUnreadIds('example/project', 7), []);
 
   const beforeStaleEvent = writes;
   trackerB.syncFromStorage(stalePausedEvent);
   trackerA.syncFromStorage(stalePausedEvent);
   assert.equal(writes, beforeStaleEvent);
 
-  const newlySubmitted = repo([pr(7, [event('baseline'), event('after-resume', t1)])]);
+  const newlySubmitted = repo([
+    pr(7, [event('baseline'), event('while-paused', t1), event('after-resume', t2)]),
+  ]);
   assert.deepEqual(
-    trackerB.observeRepo(newlySubmitted, { sequence: 2 }).map((item) => item.id),
+    trackerB.observeRepo(newlySubmitted, { sequence: 4 }).map((item) => item.id),
     ['after-resume'],
   );
   assert.deepEqual(trackerB.getUnreadIds('example/project', 7), ['after-resume']);
@@ -470,6 +479,50 @@ test('baseline flags remain usable when tracker storage reads and writes fail', 
       .map((item) => item.id),
     ['after-resume'],
   );
+});
+
+test('a swallowed write after a valid read does not restore a consumed resume baseline', () => {
+  let stored = null;
+  const seed = createReviewTracker({
+    load: () => stored,
+    save: (value) => {
+      stored = structuredClone(value);
+    },
+  });
+  seed.setUser('octocat');
+  seed.observeRepo(repo([], { paused: true }), { sequence: 1 });
+  assert.equal(stored.repoNeedsBaseline['example/project'], true);
+
+  let reads = 0;
+  let swallowedWrites = 0;
+  const tracker = createReviewTracker({
+    load: () => {
+      reads += 1;
+      return structuredClone(stored);
+    },
+    save: () => {
+      swallowedWrites += 1;
+      try {
+        throw new Error('quota exceeded');
+      } catch {
+        // Match the cache adapter, which swallows localStorage write failures.
+      }
+    },
+  });
+  tracker.setUser('octocat');
+  assert.equal(reads, 1);
+
+  tracker.observeRepo(repo([pr(7, [event('baseline')])]), { sequence: 1 });
+  assert.equal(stored.repoNeedsBaseline['example/project'], true);
+  assert.deepEqual(
+    tracker
+      .observeRepo(repo([pr(7, [event('baseline'), event('after-resume', t1)])]), { sequence: 2 })
+      .map((item) => item.id),
+    ['after-resume'],
+  );
+  assert.deepEqual(tracker.getUnreadIds('example/project', 7), ['after-resume']);
+  assert.ok(reads > 1);
+  assert.ok(swallowedWrites > 0);
 });
 
 test('restored tracker state is bounded before it is persisted again', () => {

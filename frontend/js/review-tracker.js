@@ -196,9 +196,6 @@ function mergeStates(userLogin, ...sources) {
     for (const [key, record] of Object.entries(sanitized.prs)) {
       merged.prs[key] = merged.prs[key] ? mergeRecords(merged.prs[key], record) : record;
     }
-    for (const repo of Object.keys(sanitized.repoNeedsBaseline)) {
-      merged.repoNeedsBaseline[repo] = true;
-    }
   }
   trimState(merged);
   return merged;
@@ -219,12 +216,7 @@ function stateSignature(state) {
       [...record.unread].sort((a, b) => a.id.localeCompare(b.id)),
       record.lastObservedAt,
     ]);
-  return JSON.stringify([
-    state.version,
-    state.userLogin,
-    prs,
-    Object.keys(state.repoNeedsBaseline).sort(),
-  ]);
+  return JSON.stringify([state.version, state.userLogin, prs]);
 }
 
 function sanitizeState(raw, userLogin) {
@@ -386,17 +378,19 @@ export function createReviewTracker({
   }
 
   function refreshFromStorage() {
+    const localBaseline = { ...state.repoNeedsBaseline };
     const loaded = loadState();
     const merged = mergeStates(userLogin, state, loaded.state);
-    if (loaded.succeeded) merged.repoNeedsBaseline = { ...loaded.state.repoNeedsBaseline };
+    merged.repoNeedsBaseline = localBaseline;
     state = merged;
   }
 
   function syncFromStorage(incomingState) {
     if (!userLogin || normalizeLogin(incomingState?.userLogin) !== userLogin) return false;
+    const localBaseline = { ...state.repoNeedsBaseline };
     const loaded = loadState();
     const merged = mergeStates(userLogin, state, incomingState, loaded.state);
-    if (loaded.succeeded) merged.repoNeedsBaseline = { ...loaded.state.repoNeedsBaseline };
+    merged.repoNeedsBaseline = localBaseline;
     state = merged;
     if (stateSignature(state) !== stateSignature(loaded.state)) {
       try {

@@ -84,7 +84,7 @@ paused リポジトリは `buildResponse` で `prs: []` に強制上書きされ
 ## 5.1 新着レビュー通知
 
 - 認証ユーザーと `owner/repo#number` ごとにレビュー ID を追跡し、初回観測は通知せず履歴を基準化する。以後は未観測の送信済みレビュー ID を検出し、同じ集約 status のままのレビューや COMMENTED / Bot のレビューも未読にする。
-- 直近 50 件の GraphQL 一覧窓を走査し、`submittedAt` と ID を watermark / seen set とともに bounded localStorage に保存する（PR は最大 500 件、各 PR の seen ID と watermark ID は各 100 件、既読 acknowledgement ID は各 500 件、未読レビューは全体で 250 件まで）。storage event と次の tracker 更新でタブ間の状態を ID 単位に統合する。既読 acknowledgement の保持上限を超えた履歴を持つ停止中タブとの同期は best effort である。この追加は既存クエリ内で完結しリクエスト数は増やさないが、PR ごとに最大 50 件分だけを対象とするため、それを超える取得窓の外のレビューは検出を保証しない。失敗・pause・一時的な一覧欠落・順序逆転では未読を消さず、キャッシュ描画は通知を発生させない。
+- 直近 50 件の GraphQL 一覧窓を走査し、`submittedAt` と ID を watermark / seen set とともに bounded localStorage に保存する（PR は最大 500 件、各 PR の seen ID と watermark ID は各 100 件、既読 acknowledgement ID は各 500 件、未読レビューは全体で 250 件まで）。storage event と次の tracker 更新でタブ間の review ID と既読 acknowledgement を統合する。`repoNeedsBaseline` はログイン時に保存状態から復元した後は各タブ内で管理し、paused / resume の基準化は各タブが受け取る API 応答に基づく。既読 acknowledgement の保持上限を超えた履歴を持つ停止中タブとの同期は best effort である。この追加は既存クエリ内で完結しリクエスト数は増やさないが、PR ごとに最大 50 件分だけを対象とするため、それを超える取得窓の外のレビューは検出を保証しない。失敗・pause・一時的な一覧欠落・順序逆転では未読を消さず、キャッシュ描画は通知を発生させない。
 - PR ごとの `N new reviews` リンクまたはブラウザ通知を選ぶと、操作時点で把握済みの未読 ID だけを既読にし、最新レビュー URL (取得不可なら PR URL) を開く。詳細ペインを開くだけでは既読にしない。
 - Browser notifications の許可要求はサイドバーの `Enable notifications` 操作後のみ。拒否・未対応でもカードバッジとアプリ内通知は使える。通知は PR ごとにまとめる。
 - 対象は PR の送信済み review event。単独の会話コメントと review thread の返信は対象外。閉じたブラウザへの配信には Web Push または daemon が別途必要。
