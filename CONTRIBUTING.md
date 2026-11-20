@@ -45,7 +45,7 @@ pnpm format         # Prettier 適用
 
 ### 自動テスト
 
-現状なし。動作確認は `docker compose up --build` 後にブラウザで手動シナリオ。
+`pnpm test` は Node.js 組み込みの `node --test` で回帰テストを実行します。外部 GitHub API への通信や Compose／ブラウザの起動は行わないため、該当する変更では `docker compose up --build` とブラウザでの手動確認も別途行ってください。
 
 ## サービス構成
 

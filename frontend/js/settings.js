@@ -1,4 +1,5 @@
 import { api } from './api.js';
+import { requestBrowserNotificationPermission } from './review-notifications.js';
 
 let searchTimeout = null;
 
@@ -219,35 +220,130 @@ export async function renderRepoList(onRepoChange) {
   }
 }
 
-export function initSettings() {
+export function initSettings({ onPollIntervalChange = () => {} } = {}) {
   const presets = document.getElementById('poll-presets');
-  if (!presets) return;
+  if (presets) {
+    const buttons = presets.querySelectorAll('.poll-preset');
 
-  const buttons = presets.querySelectorAll('.poll-preset');
+    function highlight(seconds) {
+      buttons.forEach((b) => {
+        const v = parseInt(b.dataset.seconds, 10);
+        b.classList.toggle('active', v === seconds);
+      });
+    }
 
-  function highlight(seconds) {
-    buttons.forEach((b) => {
-      const v = parseInt(b.dataset.seconds, 10);
-      b.classList.toggle('active', v === seconds);
+    let selectedByUser = false;
+    api.settings().then((s) => {
+      if (!selectedByUser) highlight(s.pollInterval);
+    });
+
+    buttons.forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const seconds = parseInt(btn.dataset.seconds, 10);
+        const prev = [...buttons].find((b) => b.classList.contains('active'));
+        selectedByUser = true;
+        highlight(seconds);
+        try {
+          await api.updateSettings({ pollInterval: seconds });
+          onPollIntervalChange(seconds);
+          showToast(`Auto-refresh set to ${btn.textContent}`);
+        } catch (err) {
+          // revert highlight on failure
+          if (prev) highlight(parseInt(prev.dataset.seconds, 10));
+          else api.settings().then((s) => highlight(s.pollInterval));
+          showToast(err.message, 'error');
+        }
+      });
     });
   }
 
-  api.settings().then((s) => highlight(s.pollInterval));
+  initNotificationSettings();
+}
 
-  buttons.forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      const seconds = parseInt(btn.dataset.seconds, 10);
-      const prev = [...buttons].find((b) => b.classList.contains('active'));
-      highlight(seconds);
-      try {
-        await api.updateSettings({ pollInterval: seconds });
-        showToast(`Auto-refresh set to ${btn.textContent}`);
-      } catch (err) {
-        // revert highlight on failure
-        if (prev) highlight(parseInt(prev.dataset.seconds, 10));
-        showToast(err.message, 'error');
-      }
-    });
+function initNotificationSettings() {
+  const button = document.getElementById('btn-enable-notifications');
+  const status = document.getElementById('notification-status');
+  if (!button || !status) return;
+
+  function update(permission) {
+    if (permission === 'unsupported') {
+      button.disabled = true;
+      status.textContent = 'Not supported in this browser.';
+    } else if (permission === 'granted') {
+      button.disabled = true;
+      status.textContent = 'Browser notifications enabled.';
+    } else if (permission === 'denied') {
+      button.disabled = true;
+      status.textContent = 'Blocked. Allow notifications in this site’s browser settings.';
+    } else if (permission === 'error') {
+      button.disabled = false;
+      status.textContent = 'Could not request permission. Check this site’s browser settings.';
+    } else {
+      button.disabled = false;
+      status.textContent = 'Optional; badges and in-app alerts work without it.';
+    }
+  }
+
+  let notificationApi;
+  try {
+    notificationApi = globalThis.Notification;
+  } catch {
+    notificationApi = null;
+  }
+
+  function readPermission() {
+    if (!notificationApi) return 'unsupported';
+    try {
+      return notificationApi.permission;
+    } catch {
+      return 'error';
+    }
+  }
+
+  let permissionRequestPending = false;
+  function syncPermission() {
+    if (!permissionRequestPending) update(readPermission());
+  }
+
+  function listenFor(target, event, handler) {
+    try {
+      if (typeof target?.addEventListener !== 'function') return false;
+      target.addEventListener(event, handler);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  listenFor(globalThis.window, 'focus', syncPermission);
+  listenFor(document, 'visibilitychange', () => {
+    if (!document.hidden) syncPermission();
+  });
+
+  async function subscribeToPermissionChanges() {
+    try {
+      const permissions = globalThis.navigator?.permissions;
+      if (!notificationApi || typeof permissions?.query !== 'function') return;
+      const permissionStatus = await permissions.query({ name: 'notifications' });
+      listenFor(permissionStatus, 'change', syncPermission);
+      syncPermission();
+    } catch {
+      return;
+    }
+  }
+
+  update(readPermission());
+  void subscribeToPermissionChanges();
+  button.addEventListener('click', async () => {
+    permissionRequestPending = true;
+    button.disabled = true;
+    status.textContent = 'Requesting permission…';
+    const requestedPermission = await requestBrowserNotificationPermission(notificationApi).catch(
+      () => 'error',
+    );
+    permissionRequestPending = false;
+    const currentPermission = readPermission();
+    update(currentPermission === 'default' ? requestedPermission : currentPermission);
   });
 }
 

@@ -120,6 +120,15 @@ const OPEN_PRS_QUERY = `
               author { login avatarUrl }
             }
           }
+          reviews(last: 50, states: [APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED]) {
+            nodes {
+              id
+              submittedAt
+              state
+              author { login avatarUrl }
+              url
+            }
+          }
           commits(last: 1) {
             nodes {
               commit {
@@ -176,6 +185,15 @@ const SEARCH_PRS_QUERY = `
             nodes {
               state
               author { login avatarUrl }
+            }
+          }
+          reviews(last: 50, states: [APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED]) {
+            nodes {
+              id
+              submittedAt
+              state
+              author { login avatarUrl }
+              url
             }
           }
           commits(last: 1) {
@@ -244,6 +262,13 @@ const NEEDS_COMPARE = new Set(['BEHIND', 'DIRTY', 'BLOCKED']);
 // Map one GraphQL PullRequest node to the shape the frontend expects.
 // Kept separate so both per-repo (OPEN_PRS_QUERY) and cross-repo search paths
 // produce identical PR objects.
+const SUBMITTED_REVIEW_STATES = new Set([
+  'APPROVED',
+  'CHANGES_REQUESTED',
+  'COMMENTED',
+  'DISMISSED',
+]);
+
 function mapPrNode(pr) {
   const reviews = (pr.latestOpinionatedReviews?.nodes || [])
     .filter((r) => r.author && r.state)
@@ -251,6 +276,20 @@ function mapPrNode(pr) {
       login: r.author.login,
       state: r.state,
       avatarUrl: r.author.avatarUrl,
+    }));
+
+  const reviewEvents = (pr.reviews?.nodes || [])
+    .filter(
+      (review) => review?.id && review.submittedAt && SUBMITTED_REVIEW_STATES.has(review.state),
+    )
+    .map((review) => ({
+      id: review.id,
+      submittedAt: review.submittedAt,
+      state: review.state,
+      author: review.author
+        ? { login: review.author.login, avatarUrl: review.author.avatarUrl }
+        : null,
+      url: review.url || null,
     }));
 
   const requestedReviewers = (pr.reviewRequests?.nodes || [])
@@ -289,6 +328,7 @@ function mapPrNode(pr) {
     requestedReviewers,
     reviewStatus,
     reviews,
+    reviewEvents,
     ciStatus,
     mergeable,
     mergeableState,
@@ -382,15 +422,23 @@ export async function searchOpenPRsForMe(token, repoFullNames, me) {
 
   const resolved = await resolveCompares(token, mapped, (p) => p._repoFullName);
 
-  const byRepo = new Map();
-  for (const id of repoFullNames) byRepo.set(id, []);
+  const prsByRepo = new Map();
+  for (const id of repoFullNames) {
+    const key = id.toLowerCase();
+    if (!prsByRepo.has(key)) prsByRepo.set(key, []);
+  }
   for (const pr of resolved) {
     const repoId = pr._repoFullName;
     delete pr._repoFullName;
-    if (byRepo.has(repoId)) byRepo.get(repoId).push(pr);
+    const group = prsByRepo.get(repoId.toLowerCase());
+    if (group) group.push(pr);
   }
 
-  return Array.from(byRepo, ([repo, prs]) => ({ repo, prs, error: null }));
+  return repoFullNames.map((repo) => ({
+    repo,
+    prs: prsByRepo.get(repo.toLowerCase()),
+    error: null,
+  }));
 }
 
 function mapRollupState(state) {

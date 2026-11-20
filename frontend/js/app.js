@@ -11,7 +11,17 @@ import {
   confirmDialog,
   cleanupLegacyStorage,
 } from './settings.js';
-import { readCache, writeCache, CACHE_KEYS, readAiSummary, writeAiSummary } from './local-cache.js';
+import {
+  readCache,
+  writeCache,
+  clearCache,
+  CACHE_KEYS,
+  readAiSummary,
+  writeAiSummary,
+} from './local-cache.js';
+import { createReviewTracker } from './review-tracker.js';
+import { createBrowserNotification } from './review-notifications.js';
+import { pollIntervalMs } from './poll-interval.js';
 
 // Active = polling AND visible — the unified state ships from backend as
 // `paused`, and lastData is the only place the UI reads it from. Defaults
@@ -29,7 +39,17 @@ let hasRunInitialScan = false;
 let previousPRState = null; // Map of "repo#number" -> { reviewStatus, exists }
 let lastFetchAt = 0; // timestamp (ms) of the most recent loadPRs() invocation
 let lastData = null; // most recent /api/prs response, kept for client-side re-render
+let snapshotSequence = 0;
+let activePollPromise = null;
+let currentPollIntervalMs = 60_000;
+const latestRepoSnapshotSequence = new Map();
 const VISIBILITY_REFETCH_THRESHOLD = 30_000; // skip immediate refetch if within 30s
+const reviewTracker = createReviewTracker({
+  load: () =>
+    readCache(CACHE_KEYS.reviewTracker, Number.POSITIVE_INFINITY, { throwOnError: true })?.data,
+  save: (state) => writeCache(CACHE_KEYS.reviewTracker, state),
+  clear: () => clearCache(CACHE_KEYS.reviewTracker),
+});
 
 function rerenderFromLastData() {
   if (!lastData?.repos) return;
@@ -38,6 +58,19 @@ function rerenderFromLastData() {
   lastRenderSig = renderSignature(lastData);
   reapplySearchFilter();
 }
+
+window.addEventListener('storage', (event) => {
+  if (event.key !== 'dash:review-tracker' || !event.newValue) return;
+  let cached;
+  try {
+    cached = JSON.parse(event.newValue);
+  } catch {
+    return;
+  }
+  if (!cached || typeof cached !== 'object' || !Object.hasOwn(cached, 'data')) return;
+  if (!reviewTracker.syncFromStorage(cached.data)) return;
+  rerenderFromLastData();
+});
 
 function reapplySearchFilter() {
   const input = document.getElementById('pr-search');
@@ -166,32 +199,129 @@ function stopLastUpdatedTimer() {
 
 startLastUpdatedTimer();
 
-function requestNotificationPermission() {
-  if ('Notification' in window && Notification.permission === 'default') {
-    Notification.requestPermission();
+function openGitHubUrl(url) {
+  try {
+    const safeUrl = new URL(url);
+    if (safeUrl.protocol !== 'https:' || safeUrl.hostname !== 'github.com') return;
+    const opened = window.open(safeUrl.href, '_blank', 'noopener,noreferrer');
+    if (opened) opened.opener = null;
+  } catch {
+    // Ignore invalid URLs and popup restrictions.
   }
 }
 
-function sendNotification(title, body, url) {
-  if ('Notification' in window && Notification.permission === 'granted') {
-    const n = new Notification(title, { body });
-    if (url) {
-      n.onclick = () => {
-        window.open(url, '_blank');
-        n.close();
-      };
+function sendNotification(title, body, url, tag = undefined, onClick = null) {
+  const notification = createBrowserNotification(globalThis.Notification, {
+    title,
+    body,
+    tag,
+    onClick: onClick || (() => openGitHubUrl(url)),
+  });
+  if (notification) {
+    setTimeout(() => {
+      try {
+        notification.close?.();
+      } catch {
+        // Notification APIs vary between browsers.
+      }
+    }, 10_000);
+  }
+}
+
+function notifyNewReviewEvents(events) {
+  const grouped = new Map();
+  for (const event of events) {
+    const key = `${event.repo}#${event.number}`;
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key).push(event);
+  }
+
+  for (const newEvents of grouped.values()) {
+    const { repo, number } = newEvents[0];
+    const unread = reviewTracker.getUnread(repo, number);
+    const newest = unread[0] || newEvents[0];
+    const unreadIds = unread.map((event) => event.id);
+    const count = newEvents.length;
+    const summary = `${count} new review${count === 1 ? '' : 's'} on ${repo} #${number}`;
+    showToast(summary);
+    sendNotification(
+      `New review: ${repo} #${number}`,
+      `${count} new review${count === 1 ? '' : 's'} · ${newest.authorLogin} · ${newest.state}`,
+      newest.url || newest.prUrl,
+      `review-${repo}-${number}`,
+      () => {
+        try {
+          reviewTracker.markRead(repo, number, unreadIds);
+          rerenderFromLastData();
+        } finally {
+          openGitHubUrl(newest.url || newest.prUrl);
+        }
+      },
+    );
+  }
+}
+
+function applyRepoSnapshot(repoData, sequence) {
+  const repo = repoData?.repo;
+  if (!repo) return false;
+  const latestSequence = latestRepoSnapshotSequence.get(repo) ?? -Infinity;
+  if (sequence < latestSequence) return false;
+  latestRepoSnapshotSequence.set(repo, sequence);
+  const newEvents = reviewTracker.observeRepo(repoData, { sequence });
+  if (previousPRState && newEvents.length > 0) {
+    const eventKeys = new Set(newEvents.map((event) => `${event.repo}#${event.number}`));
+    for (const pr of repoData.prs || []) {
+      const key = `${repo}#${pr.number}`;
+      if (eventKeys.has(key) && previousPRState.has(key)) {
+        previousPRState.set(key, pr.reviewStatus);
+      }
     }
-    setTimeout(() => n.close(), 10000);
   }
+  notifyNewReviewEvents(newEvents);
+  return true;
 }
 
-function detectChangesAndNotify(newData) {
+function applyFullSnapshot(data, sequence) {
+  const incomingRepos = new Set();
+  const repos = [];
+  const newEvents = [];
+  for (const repoData of data.repos || []) {
+    incomingRepos.add(repoData.repo);
+    const latestSequence = latestRepoSnapshotSequence.get(repoData.repo) ?? -Infinity;
+    if (sequence < latestSequence) {
+      const current = lastData?.repos?.find((repo) => repo.repo === repoData.repo);
+      if (current) repos.push(current);
+      continue;
+    }
+    latestRepoSnapshotSequence.set(repoData.repo, sequence);
+    newEvents.push(...reviewTracker.observeRepo(repoData, { sequence }));
+    repos.push(repoData);
+  }
+
+  for (const current of lastData?.repos || []) {
+    if (
+      !incomingRepos.has(current.repo) &&
+      (latestRepoSnapshotSequence.get(current.repo) ?? -Infinity) > sequence
+    ) {
+      repos.push(current);
+    }
+  }
+
+  notifyNewReviewEvents(newEvents);
+  return {
+    data: { ...data, repos },
+    reviewKeys: new Set(newEvents.map((event) => `${event.repo}#${event.number}`)),
+  };
+}
+
+function detectChangesAndNotify(newData, reviewKeys = new Set()) {
   if (!newData || !newData.repos) return;
   if (!previousPRState) {
     // First load: build state without notifying
     previousPRState = new Map();
     for (const repo of newData.repos) {
-      for (const pr of repo.prs) {
+      if (repo.paused || repo.error) continue;
+      for (const pr of repo.prs || []) {
         previousPRState.set(`${repo.repo}#${pr.number}`, pr.reviewStatus);
       }
     }
@@ -200,7 +330,14 @@ function detectChangesAndNotify(newData) {
 
   const newState = new Map();
   for (const repo of newData.repos) {
-    for (const pr of repo.prs) {
+    if (repo.paused || repo.error) {
+      const prefix = `${repo.repo}#`;
+      for (const [key, status] of previousPRState) {
+        if (key.startsWith(prefix)) newState.set(key, status);
+      }
+      continue;
+    }
+    for (const pr of repo.prs || []) {
       const key = `${repo.repo}#${pr.number}`;
       newState.set(key, pr.reviewStatus);
 
@@ -208,7 +345,7 @@ function detectChangesAndNotify(newData) {
       if (oldStatus === undefined) {
         // New PR opened
         sendNotification(`New PR: ${repo.repo}`, `#${pr.number} ${pr.title}`, pr.url);
-      } else if (oldStatus !== pr.reviewStatus) {
+      } else if (oldStatus !== pr.reviewStatus && !reviewKeys.has(key)) {
         // Status changed
         sendNotification(
           `Status changed: ${repo.repo} #${pr.number}`,
@@ -385,6 +522,7 @@ function renderPRCard(pr) {
   const urlParts = pr.url.replace('https://github.com/', '').split('/');
   const prOwner = urlParts[0];
   const prRepo = urlParts[1];
+  const repoId = `${prOwner}/${prRepo}`;
 
   card.tabIndex = 0;
   card.setAttribute('role', 'button');
@@ -396,6 +534,7 @@ function renderPRCard(pr) {
   };
   card.addEventListener('click', openPane);
   card.addEventListener('keydown', (e) => {
+    if (e.target.closest('a, button')) return;
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
       openPane(e);
@@ -565,7 +704,38 @@ function renderPRCard(pr) {
   }
   badge.append(icon, document.createTextNode(` ${badgeLabel}`));
 
-  row3.append(row3Left, badge);
+  const reviewBadges = document.createElement('div');
+  reviewBadges.className = 'pr-review-badges';
+  const unreadReviews = reviewTracker.getUnread(repoId, pr.number);
+  if (unreadReviews.length > 0) {
+    const latestReview = unreadReviews[0];
+    const unreadIds = unreadReviews.map((review) => review.id);
+    const newReviewLink = document.createElement('a');
+    newReviewLink.className = 'new-review-badge';
+    newReviewLink.href = latestReview.url || pr.url;
+    newReviewLink.target = '_blank';
+    newReviewLink.rel = 'noopener noreferrer';
+    newReviewLink.textContent = `${unreadReviews.length} new review${unreadReviews.length === 1 ? '' : 's'}`;
+    newReviewLink.setAttribute(
+      'aria-label',
+      `${newReviewLink.textContent} on ${repoId} #${pr.number}`,
+    );
+    const reviewUrl = newReviewLink.href;
+    newReviewLink.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      try {
+        reviewTracker.markRead(repoId, pr.number, unreadIds);
+        rerenderFromLastData();
+      } finally {
+        openGitHubUrl(reviewUrl);
+      }
+    });
+    reviewBadges.appendChild(newReviewLink);
+  }
+  reviewBadges.appendChild(badge);
+
+  row3.append(row3Left, reviewBadges);
   card.append(row1);
   if (labelsContainer) card.appendChild(labelsContainer);
   card.append(row2, row3);
@@ -782,6 +952,7 @@ function renderRepoSection(repoData) {
 async function loadSingleRepo(repoId) {
   const main = document.getElementById('pr-content');
   const [owner, name] = repoId.split('/');
+  const sequence = ++snapshotSequence;
 
   // Pause polling so a background loadPRs() doesn't blow away the loading
   // section (or the freshly-inserted real section) mid-fetch.
@@ -813,6 +984,7 @@ async function loadSingleRepo(repoId) {
       error: null,
       paused: lastDataPaused(repoId),
     };
+    if (!applyRepoSnapshot(repoData, sequence)) return;
     const newSection = renderRepoSection(repoData);
     // Replace the existing section in place if present (per-repo refresh path)
     // — without this, a second copy of the repo gets prepended and lingers
@@ -848,6 +1020,7 @@ async function loadSingleRepo(repoId) {
       error: { message: err.message, status: err.status || null },
       paused: lastDataPaused(repoId),
     };
+    if (!applyRepoSnapshot(errored, sequence)) return;
     upsertLastDataRepo(errored);
     // Re-render the section in place so the error tag shows up but the PR
     // cards stay visible.
@@ -901,6 +1074,7 @@ function repoSignature(r) {
       (pr.assignees || []).map((a) => a.login).join(','),
       (pr.requestedReviewers || []).map((r) => r.login).join(','),
       (pr.reviews || []).map((rv) => `${rv.login}:${rv.state}`).join(','),
+      reviewTracker.getUnreadIds(r.repo, pr.number).join(','),
       (pr.labels || []).map((l) => l.name).join(','),
     ]),
   });
@@ -911,9 +1085,19 @@ function renderSignature(data) {
 }
 
 async function loadPRs() {
+  if (activePollPromise) return activePollPromise;
+  activePollPromise = loadPRsOnce().finally(() => {
+    activePollPromise = null;
+  });
+  return activePollPromise;
+}
+
+async function loadPRsOnce() {
   const main = document.getElementById('pr-content');
+  const sequence = ++snapshotSequence;
   try {
-    const data = await api.prs(true);
+    const response = await api.prs(true);
+    const { data, reviewKeys } = applyFullSnapshot(response, sequence);
     // Update lastFetchAt only on success — otherwise paintFromCache's stamp
     // gets overwritten with "now" while we're still showing stale data.
     lastFetchAt = Date.now();
@@ -924,7 +1108,7 @@ async function loadPRs() {
     hideBanner();
     lastData = data;
     writeCache(CACHE_KEYS.prs, data);
-    detectChangesAndNotify(data);
+    detectChangesAndNotify(data, reviewKeys);
     updateStats(data);
 
     if (!data.repos || data.repos.length === 0) {
@@ -1915,39 +2099,30 @@ function hideBanner() {
 
 let pollingCallId = 0;
 
-// Polling cadence when the tab is in the background. Long enough to keep
-// rate-limit consumption negligible (12 req/h per repo), short enough that
-// `detectChangesAndNotify` can still fire native browser notifications for
-// PRs that arrive while the user is on another tab.
-const BACKGROUND_POLL_MS = 5 * 60 * 1000;
-
-async function startPolling({ skipImmediate = false, intervalMs = null } = {}) {
+async function startPolling({ skipImmediate = false, intervalSeconds = null } = {}) {
   stopPolling();
   // Tag this invocation; if a newer startPolling races us across the
   // `await api.settings()` (e.g. visibilitychange + loadSingleRepo finally),
   // the older call must drop its setInterval to avoid leaking a duplicate.
-  const callId = ++pollingCallId;
-  try {
-    let interval;
-    if (intervalMs != null) {
-      interval = intervalMs; // background mode bypasses the user's setting
-    } else {
+  const callId = pollingCallId;
+  if (intervalSeconds !== null) {
+    currentPollIntervalMs = pollIntervalMs({ pollInterval: intervalSeconds });
+  } else {
+    try {
       const settings = await api.settings();
       if (callId !== pollingCallId) return;
-      interval = settings.pollInterval * 1000;
+      currentPollIntervalMs = pollIntervalMs(settings);
+    } catch {
+      if (callId !== pollingCallId) return;
     }
-    if (!skipImmediate) await loadPRs();
-    if (callId !== pollingCallId) return;
-    pollTimer = setInterval(loadPRs, interval);
-  } catch {
-    if (callId !== pollingCallId) return;
-    if (!skipImmediate) await loadPRs();
-    if (callId !== pollingCallId) return;
-    pollTimer = setInterval(loadPRs, intervalMs ?? 60_000);
   }
+  if (!skipImmediate) await loadPRs();
+  if (callId !== pollingCallId) return;
+  pollTimer = setInterval(loadPRs, currentPollIntervalMs);
 }
 
 function stopPolling() {
+  pollingCallId += 1;
   if (pollTimer) {
     clearInterval(pollTimer);
     pollTimer = null;
@@ -1956,13 +2131,13 @@ function stopPolling() {
 
 // Page Visibility API. The "last updated" UI timer stops when the tab is
 // hidden (no point spending CPU updating an invisible label), but the data
-// poller switches to a slow background cadence instead of fully stopping —
+// poller keeps the selected interval instead of fully stopping —
 // otherwise PRs that arrive while the user is on another tab go undetected
 // and detectChangesAndNotify can never fire a native browser notification.
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
     stopLastUpdatedTimer();
-    startPolling({ skipImmediate: true, intervalMs: BACKGROUND_POLL_MS });
+    startPolling({ skipImmediate: true });
   } else {
     startLastUpdatedTimer();
     updateLastUpdatedDisplay();
@@ -2022,7 +2197,10 @@ function paintFromCache() {
   // blank while the fresh API calls are in flight. Sidebar gets re-painted
   // by the standard renderRepoList() flow shortly after.
   const cachedMe = readCache(CACHE_KEYS.me);
-  if (cachedMe?.data) applyUserToHeader(cachedMe.data);
+  if (cachedMe?.data) {
+    reviewTracker.setUser(cachedMe.data.login);
+    applyUserToHeader(cachedMe.data);
+  }
 
   const cachedPrs = readCache(CACHE_KEYS.prs);
   if (cachedPrs?.data?.repos) {
@@ -2041,8 +2219,6 @@ function paintFromCache() {
 // Init
 async function init() {
   cleanupLegacyStorage();
-
-  requestNotificationPermission();
 
   // Token lives only in localStorage. No backend session.
   if (!getStoredToken()) {
@@ -2085,6 +2261,8 @@ async function init() {
   }
 
   applyUserToHeader(me);
+  reviewTracker.setUser(me.login);
+  rerenderFromLastData();
 
   const onRepoChange = async (changeOrAddedId) => {
     // Backwards compat: a bare string means "added repo".
@@ -2103,6 +2281,7 @@ async function init() {
       if (target) {
         target.paused = change.pauseChanged.paused;
         if (change.pauseChanged.paused) {
+          applyRepoSnapshot(target, ++snapshotSequence);
           rerenderFromLastData();
           updateStats(lastData);
         } else {
@@ -2115,6 +2294,8 @@ async function init() {
 
     await renderRepoList(onRepoChange);
     if (change.removed) {
+      latestRepoSnapshotSequence.set(change.removed, ++snapshotSequence);
+      reviewTracker.markRepoForBaseline(change.removed);
       // Drop from lastData immediately so a subsequent rerender (sort change,
       // visibility toggle) doesn't resurrect the deleted repo if loadPRs fails.
       removeLastDataRepo(change.removed);
@@ -2128,6 +2309,7 @@ async function init() {
       rerenderFromLastData();
     }
     if (change.added) {
+      reviewTracker.markRepoForBaseline(change.added);
       await loadSingleRepo(change.added);
     } else {
       await loadPRs();
@@ -2135,7 +2317,10 @@ async function init() {
   };
 
   initSidebar(onRepoChange);
-  initSettings();
+  initSettings({
+    onPollIntervalChange: (seconds) =>
+      startPolling({ skipImmediate: true, intervalSeconds: seconds }),
+  });
   initAiPanel();
   await renderRepoList(onRepoChange);
 
@@ -2167,9 +2352,13 @@ async function init() {
 
     setLoading(true, 'Refreshing PR data...');
     paneCache.clear();
+    const sequence = ++snapshotSequence;
     try {
-      const data = await api.refreshPrs(true);
+      const response = await api.refreshPrs(true);
+      const { data, reviewKeys } = applyFullSnapshot(response, sequence);
       lastData = data;
+      detectChangesAndNotify(data, reviewKeys);
+      updateStats(data);
       // Persist + invalidate downstream caches so a hard reload right after
       // refresh doesn't show 5-minute-old data from the SW or 1-hour-old data
       // from localStorage. The backend POST /api/prs/refresh is not cached by

@@ -16,7 +16,7 @@
 
 - リポジトリ別の Open PR カード表示、レビュー状態 (Approved / Changes Requested / Pending / Review Required) で色分け
 - 詳細ペイン: 変更ファイル / 失敗 CI チェック (Actions ログへリンク) / 未解決コメント / AI 要約 (claude / codex / gemini / chatgpt CLI)
-- フォアグラウンド (ユーザー設定間隔) + バックグラウンド (5 分) ポーリング、ブラウザ通知
+- 新着レビューの未読バッジ / アプリ内通知、任意のブラウザ通知 (タブが動作中は設定間隔で確認)
 - 目アイコンひとつで「表示 + 更新」を atomic に切替 (停止中は GitHub API 呼び出しゼロ)
 - `assignee=me` 経路は GitHub GraphQL search で server-side filter
 - 3 層キャッシュ (backend / Service Worker 15 分 / localStorage) でハードリロード後も即時再描画
