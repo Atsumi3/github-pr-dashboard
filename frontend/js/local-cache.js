@@ -19,10 +19,12 @@ export const CACHE_KEYS = Object.freeze({
   me: 'me',
   repos: 'repos',
   prs: 'prs',
+  reviewTracker: 'review-tracker',
 });
 
 const TTL_BY_KEY = Object.freeze({
   prs: PRS_TTL_MS,
+  reviewTracker: Number.POSITIVE_INFINITY,
 });
 
 function storageKey(key) {

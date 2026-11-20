@@ -1,4 +1,4 @@
-import { clearAllCaches } from './local-cache.js';
+import { CACHE_KEYS, clearAllCaches, clearCache } from './local-cache.js';
 
 const KEY = 'gh-token';
 
@@ -23,8 +23,9 @@ export function setToken(token) {
   // If the user swapped GitHub identities, drop SW-cached responses from the
   // previous identity so the new session doesn't briefly show the old user's
   // PR list out of cache.
-  if (prev && prev !== token) {
-    clearServiceWorkerCache();
+  if (prev !== token) {
+    clearCache(CACHE_KEYS.reviewTracker);
+    if (prev) clearServiceWorkerCache();
   }
 }
 

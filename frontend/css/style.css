@@ -862,6 +862,44 @@ body {
   flex-wrap: wrap;
 }
 
+.notification-settings {
+  margin-top: var(--space-4);
+}
+.notification-controls {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.btn-enable-notifications {
+  min-height: var(--size-input-sm);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  cursor: pointer;
+}
+.btn-enable-notifications:hover:not(:disabled) {
+  border-color: var(--border-hover);
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.btn-enable-notifications:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+.notification-status {
+  flex: 1 1 100%;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
 .last-updated {
   font-family: var(--font-mono);
   font-size: var(--text-xs);
@@ -1750,6 +1788,41 @@ body {
 .badge-icon {
   font-size: var(--text-sm);
   line-height: 1;
+}
+.pr-review-badges {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  min-width: 0;
+  max-width: 100%;
+}
+.pr-review-badges .badge {
+  margin-left: 0;
+}
+.new-review-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--accent);
+  border-radius: 13px;
+  background: var(--accent-dim);
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.new-review-badge:hover {
+  background: var(--bg-hover);
+}
+.new-review-badge:focus-visible,
+.btn-enable-notifications:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
 }
 
 /* ============================
@@ -2727,6 +2800,9 @@ body.loading .loading-overlay {
   }
   .badge {
     margin-left: 0;
+  }
+  .pr-review-badges {
+    justify-content: flex-start;
   }
   .repo-cards {
     grid-template-columns: 1fr;
