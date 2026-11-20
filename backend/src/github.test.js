@@ -155,6 +155,29 @@ test('cross-repository search groups results case-insensitively and preserves wa
   assert.equal(queries.length, 4);
 });
 
+test('cross-repository search returns each case-equivalent watched spelling', async (t) => {
+  const queries = withGraphQLResponse(t, () => ({
+    search: {
+      nodes: [
+        {
+          ...prNode(),
+          repository: { nameWithOwner: 'fixture-org/sample-repo' },
+        },
+      ],
+    },
+  }));
+
+  const watched = ['Fixture-Org/Sample-Repo', 'fixture-org/sample-repo'];
+  const results = await searchOpenPRsForMe('test-token', watched, 'octocat');
+
+  assert.deepEqual(
+    results.map(({ repo, prs, error }) => ({ repo, prCount: prs.length, error })),
+    watched.map((repo) => ({ repo, prCount: 1, error: null })),
+  );
+  for (const { prs } of results) assertReviewEvents(prs[0]);
+  assert.equal(queries.length, 2);
+});
+
 test('empty review connections normalize to an empty event list', async (t) => {
   const node = prNode();
   node.reviews = { nodes: [] };
